@@ -1,0 +1,17 @@
+[package]
+name = "switchfix-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Use-cases and ports for SwitchFix"
+
+[dependencies]
+switchfix-domain = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "test-util"] }

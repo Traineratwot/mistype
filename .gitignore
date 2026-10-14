@@ -1,0 +1,19 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local config / secrets
+*.local.toml
+.env
+
+# Build artifacts
+*.deb
+*.rpm
+*.AppImage
+dist/

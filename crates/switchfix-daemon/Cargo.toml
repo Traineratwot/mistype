@@ -1,0 +1,23 @@
+[package]
+name = "switchfix-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SwitchFix daemon, CLI and composition root"
+
+[[bin]]
+name = "switchfix"
+path = "src/main.rs"
+
+[dependencies]
+switchfix-domain = { workspace = true }
+switchfix-app = { workspace = true }
+switchfix-adapters = { workspace = true }
+switchfix-ui = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+zbus = { workspace = true }
+async-trait = { workspace = true }

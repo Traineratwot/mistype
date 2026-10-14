@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/switchfix-domain",
+    "crates/switchfix-app",
+    "crates/switchfix-adapters",
+    "crates/switchfix-ui",
+    "crates/switchfix-daemon",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["SwitchFix contributors"]
+repository = "https://github.com/switchfix/switchfix"
+description = "Fix text typed in the wrong keyboard layout — Linux/KDE answer to Punto Switcher"
+
+[workspace.dependencies]
+switchfix-domain = { path = "crates/switchfix-domain" }
+switchfix-app = { path = "crates/switchfix-app" }
+switchfix-adapters = { path = "crates/switchfix-adapters" }
+switchfix-ui = { path = "crates/switchfix-ui" }
+
+async-trait = "0.1"
+thiserror = "2"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+dirs = "6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "process"] }
+zbus = "5"
+evdev = "0.13"
+clap = { version = "4", features = ["derive"] }
+ksni = "0.2"
+iced = { version = "0.13", features = ["tokio"] }
+wl-clipboard-rs = "0.8"
+arboard = "3"
+uuid = { version = "1", features = ["v4"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
