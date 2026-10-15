@@ -31,14 +31,6 @@ pub(crate) fn parse_hotkey_bindings(
             cfg.hotkeys.convert_selection.clone(),
             HotkeyEvent::ConvertSelection,
         ),
-        (
-            cfg.hotkeys.convert_last_word.clone(),
-            HotkeyEvent::ConvertLastWord,
-        ),
-        (
-            cfg.hotkeys.convert_terminal.clone(),
-            HotkeyEvent::ConvertTerminal,
-        ),
         (cfg.hotkeys.toggle_enabled.clone(), HotkeyEvent::ToggleEnabled),
     ];
     let mut out = Vec::new();
@@ -63,10 +55,8 @@ mod tests {
     fn parse_hotkey_bindings_valid_and_invalid() {
         let mut cfg = AppConfig::default();
         cfg.hotkeys.convert_selection = "ctrl+f1".into();
-        cfg.hotkeys.convert_last_word = "insert".into();
-        cfg.hotkeys.convert_terminal = "ctrl+".into();
         cfg.hotkeys.toggle_enabled = "ctrl+pause".into();
         let parsed = parse_hotkey_bindings(&cfg);
-        assert_eq!(parsed.len(), 3, "invalid string should be skipped");
+        assert_eq!(parsed.len(), 2);
     }
 }

@@ -57,7 +57,8 @@ pub enum KeyChord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CorrectionRequest {
     ConvertSelection,
-    ConvertLastWord,
+    /// Internal: selection convert with terminal erase/paste strategy
+    /// (auto-selected when the focused app is a terminal).
     ConvertTerminal,
 }
 

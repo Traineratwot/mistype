@@ -152,10 +152,7 @@ impl CorrectionService {
         // Auto-pick terminal strategy when the focused app is a terminal —
         // no separate hotkey needed.
         let req = match (&req, &win) {
-            (
-                CorrectionRequest::ConvertSelection | CorrectionRequest::ConvertLastWord,
-                Some(w),
-            ) => {
+            (CorrectionRequest::ConvertSelection, Some(w)) => {
                 let app = w.app_id.to_ascii_lowercase();
                 if cfg
                     .behavior
@@ -176,7 +173,6 @@ impl CorrectionService {
 
         let outcome = match req {
             CorrectionRequest::ConvertSelection => self.convert_selection().await,
-            CorrectionRequest::ConvertLastWord => self.convert_last_word().await,
             CorrectionRequest::ConvertTerminal => self.convert_terminal().await,
         };
 
@@ -207,7 +203,7 @@ impl CorrectionService {
                 // uses Backspace, which DELETES an active selection (one
                 // Backspace wipes the whole selection) — that is exactly the
                 // "selection vanished, nothing inserted" bug. Never fall back
-                // from the selection hotkey; use ConvertLastWord for that.
+                // to Backspace here.
                 return CorrectionOutcome::NoInputFound;
             }
             Err(e) => {
@@ -219,62 +215,13 @@ impl CorrectionService {
         self.replace_via_clipboard(captured).await
     }
 
-    async fn convert_last_word(&self) -> CorrectionOutcome {
-        let Some(span) = self.buffer.take_last_word() else {
-            return CorrectionOutcome::NoInputFound;
-        };
-
-        let converted = match convert(&span.text, &self.tables, None, None) {
-            Ok(c) => c,
-            Err(e) => {
-                debug!("convert last word: {e}");
-                return CorrectionOutcome::NoInputFound;
-            }
-        };
-
-        let _ = self.state_tx.send(CorrectionState::Replacing);
-
-        // Switch layout BEFORE typing so physical keys match the target layout.
-        self.switch_layout_for(&converted.converted).await;
-        tokio::time::sleep(Duration::from_millis(40)).await;
-
-        if let Err(e) = self.injector.backspace(span.char_len).await {
-            return CorrectionOutcome::Failed(format!("backspace: {e}"));
-        }
-
-        // Prefer clipboard paste: type_text's keymap is incomplete for some
-        // chars and fails *after* backspace (word vanishes). Paste is reliable.
-        let paste_path = self.replace_word_via_paste(&converted.converted).await;
-        if let Err(e) = paste_path {
-            let target_layout = LayoutId::new(converted.to.as_str().to_string());
-            if let Err(e2) = self
-                .injector
-                .type_text(&converted.converted, &target_layout)
-                .await
-            {
-                return CorrectionOutcome::Failed(format!("paste: {e}; type_text: {e2}"));
-            }
-        }
-
-        self.buffer.clear();
-
-        CorrectionOutcome::Converted {
-            original: converted.original,
-            converted: converted.converted,
-            layout_switched_to: None,
-        }
-    }
-
     async fn convert_terminal(&self) -> CorrectionOutcome {
-        // Terminal mode: use last word from buffer (or selection), then
-        // clear the input line and paste via Ctrl+Shift+V.
+        // Terminal mode: capture selection (or fail), then clear the input
+        // line and paste via Ctrl+Shift+V.
         let cfg = self.cfg();
-        let (text, saved) = match self.buffer.take_last_word() {
-            Some(span) => (span.text, None),
-            None => match self.selection.capture_selection().await {
-                Ok(Some(sel)) => (sel.text, Some(sel.saved)),
-                _ => return CorrectionOutcome::NoInputFound,
-            },
+        let (text, saved) = match self.selection.capture_selection().await {
+            Ok(Some(sel)) => (sel.text, Some(sel.saved)),
+            _ => return CorrectionOutcome::NoInputFound,
         };
 
         let converted = match convert(&text, &self.tables, None, None) {
@@ -385,27 +332,6 @@ impl CorrectionService {
             converted: converted.converted,
             layout_switched_to: None,
         }
-    }
-
-    /// Paste `text` via clipboard (Ctrl+V) after the word was erased.
-    async fn replace_word_via_paste(&self, text: &str) -> Result<(), String> {
-        let cfg = self.cfg();
-        let saved = self.clipboard.save().await.ok();
-        self.clipboard
-            .put_text(text)
-            .await
-            .map_err(|e| format!("clipboard put: {e}"))?;
-        self.injector
-            .chord(KeyChord::CtrlV)
-            .await
-            .map_err(|e| format!("paste: {e}"))?;
-        tokio::time::sleep(Duration::from_millis(cfg.behavior.paste_settle_ms)).await;
-        if let Some(s) = saved {
-            if cfg.behavior.restore_clipboard {
-                let _ = self.clipboard.restore(s).await;
-            }
-        }
-        Ok(())
     }
 
     /// Best-effort clipboard restore (never fails the conversion).
@@ -668,37 +594,26 @@ mod tests {
 
     #[tokio::test]
     async fn last_word_converts_ghbdtn() {
+        // Last-word hotkey is gone; selection path is the only convert entry.
         let (svc, inj, _clip, buf) = service(None, Some("ghbdtn".into()), false, true);
-        let out = svc.handle(CorrectionRequest::ConvertLastWord).await;
-        match out {
-            CorrectionOutcome::Converted {
-                original,
-                converted,
-                ..
-            } => {
-                assert_eq!(original, "ghbdtn");
-                assert_eq!(converted, "привет");
-            }
-            other => panic!("unexpected {other:?}"),
-        }
+        let out = svc.handle(CorrectionRequest::ConvertSelection).await;
+        assert_eq!(out, CorrectionOutcome::NoInputFound);
         let log = inj.log.lock().unwrap().clone();
-        assert!(log.iter().any(|l| l == "bs:6"), "log={log:?}");
-        // Word replace prefers clipboard paste over type_text.
-        assert!(log.iter().any(|l| l.contains("chord:CtrlV")), "log={log:?}");
-        assert!(buf.word.lock().unwrap().is_none());
+        assert!(log.iter().all(|l| !l.starts_with("bs:")), "log={log:?}");
+        assert!(buf.word.lock().unwrap().is_some(), "buffer unused by selection");
     }
 
     #[tokio::test]
     async fn last_word_empty_is_no_input() {
         let (svc, _i, _c, _b) = service(None, None, false, true);
-        let out = svc.handle(CorrectionRequest::ConvertLastWord).await;
+        let out = svc.handle(CorrectionRequest::ConvertSelection).await;
         assert_eq!(out, CorrectionOutcome::NoInputFound);
     }
 
     #[tokio::test]
     async fn disabled_is_disabled() {
-        let (svc, inj, _c, _b) = service(None, Some("ghbdtn".into()), false, false);
-        let out = svc.handle(CorrectionRequest::ConvertLastWord).await;
+        let (svc, inj, _c, _b) = service(Some("ghbdtn".into()), None, false, false);
+        let out = svc.handle(CorrectionRequest::ConvertSelection).await;
         assert_eq!(out, CorrectionOutcome::Disabled);
         assert!(inj.log.lock().unwrap().is_empty());
     }
@@ -742,8 +657,8 @@ mod tests {
 
     #[tokio::test]
     async fn layout_fail_still_reports_conversion() {
-        let (svc, _i, _c, _b) = service(None, Some("ghbdtn".into()), true, true);
-        let out = svc.handle(CorrectionRequest::ConvertLastWord).await;
+        let (svc, _i, _c, _b) = service(Some("ghbdtn".into()), None, true, true);
+        let out = svc.handle(CorrectionRequest::ConvertSelection).await;
         // text was replaced even if layout switch failed
         assert!(out.is_success(), "{out:?}");
     }
@@ -759,7 +674,7 @@ mod tests {
 
     #[tokio::test]
     async fn terminal_chords() {
-        let (svc, inj, _c, _b) = service(None, Some("ghbdtn".into()), false, true);
+        let (svc, inj, _c, _b) = service(Some("ghbdtn".into()), None, false, true);
         let out = svc.handle(CorrectionRequest::ConvertTerminal).await;
         assert!(out.is_success(), "{out:?}");
         let log = inj.log.lock().unwrap().clone();

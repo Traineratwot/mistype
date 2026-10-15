@@ -18,7 +18,7 @@ systemctl --user start switchfix
 | # | Scenario | Expectation | Kate | Firefox | Konsole | Telegram | VS Code |
 |---|----------|-------------|------|---------|---------|----------|---------|
 | M1 | Select `ghbdtn`, press **Ctrl+F1** | Selection becomes `привет`, layout switches to RU, clipboard restored | | | | | |
-| M2 | No selection, type `ghbdtn` then **Ctrl+F2** | Last word becomes `привет` (backspace+retype), layout RU, clipboard untouched | | | | | |
+| M2 | No selection, type `ghbdtn` | NoInputFound (no last-word path) | | | | | |
 | M3 | Empty selection, **Ctrl+F1** | `NoInputFound` (or fallback word if enabled), clipboard unchanged | | | | | |
 | M4 | Select `hello мир`, **Ctrl+F1** | Converts by majority direction (`detect_direction`); mixed parts handled per map | | | | | |
 | M5 | Password field + hotkey | No leak: excluded app or user docs warning; buffer not filled if app excluded | | | | | |

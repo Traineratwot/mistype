@@ -209,14 +209,6 @@ impl EvdevHotkeySource {
                 HotkeyEvent::ConvertSelection,
             ),
             (
-                HotkeyBinding::parse("ctrl+f2").unwrap(),
-                HotkeyEvent::ConvertLastWord,
-            ),
-            (
-                HotkeyBinding::parse("ctrl+shift+f1").unwrap(),
-                HotkeyEvent::ConvertTerminal,
-            ),
-            (
                 HotkeyBinding::parse("ctrl+pause").unwrap(),
                 HotkeyEvent::ToggleEnabled,
             ),

@@ -239,11 +239,8 @@ pub async fn run() -> DoctorReport {
             "hotkeys".into(),
             true,
             format!(
-                "selection=[{}]  last-word=[{}]  terminal=[{}]  toggle=[{}]",
-                cfg.hotkeys.convert_selection,
-                cfg.hotkeys.convert_last_word,
-                cfg.hotkeys.convert_terminal,
-                cfg.hotkeys.toggle_enabled
+                "selection=[{}]  toggle=[{}]",
+                cfg.hotkeys.convert_selection, cfg.hotkeys.toggle_enabled
             ),
         ));
     }

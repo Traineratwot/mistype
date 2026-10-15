@@ -17,7 +17,6 @@ use tracing::info;
 pub enum TrayCommand {
     ToggleEnabled,
     ConvertSelection,
-    ConvertLastWord,
     OpenSettings,
     Quit,
 }
@@ -160,13 +159,6 @@ impl Tray for SwitchFixTray {
                 label: "Исправить выделенный текст".into(),
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.model.cmd_tx.try_send(TrayCommand::ConvertSelection);
-                }),
-                ..Default::default()
-            }),
-            MenuItem::Standard(StandardItem {
-                label: "Исправить последнее слово".into(),
-                activate: Box::new(|this: &mut Self| {
-                    let _ = this.model.cmd_tx.try_send(TrayCommand::ConvertLastWord);
                 }),
                 ..Default::default()
             }),

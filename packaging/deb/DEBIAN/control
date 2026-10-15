@@ -15,8 +15,7 @@ Description: Fix text typed in the wrong keyboard layout (EN↔RU)
  .
  Features (MVP):
   * Convert selection (Ctrl+F1) via clipboard-marker protocol
-  * Convert last word (Ctrl+F2) via in-memory keystroke buffer
-  * Terminal mode (Ctrl+Shift+F1)
+  * Auto terminal mode (clear line + Ctrl+Shift+V) in konsole/kitty/…
   * Toggle on/off (Ctrl+Pause) and tray menu
   * System layout switch through org.kde.KeyboardLayouts
  .

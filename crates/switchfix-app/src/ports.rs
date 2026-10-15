@@ -92,8 +92,6 @@ pub enum NotifyLevel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HotkeyEvent {
     ConvertSelection,
-    ConvertLastWord,
-    ConvertTerminal,
     ToggleEnabled,
 }
 

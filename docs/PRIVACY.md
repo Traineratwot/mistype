@@ -36,7 +36,7 @@ Nothing. SwitchFix does not open network connections. The only IPC is:
 
 ## Your choices
 
-- `privacy.typing_buffer = false` — disable the keystroke buffer entirely (Ctrl+F2 / last-word mode stops working).
+- `privacy.typing_buffer = false` — disable the keystroke buffer entirely.
 - `privacy.typing_buffer_max_keys` — shrink the RAM window (default 256).
 - `privacy.log_text_content` — keep **false** unless you are debugging; when true, logs may contain converted text.
 - Uninstall / purge removes the package; delete `~/.config/switchfix/` to remove all local state.

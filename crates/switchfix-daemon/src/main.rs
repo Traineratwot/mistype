@@ -194,8 +194,6 @@ async fn run_daemon() -> anyhow::Result<()> {
 
                         let req = match he {
                             HotkeyEvent::ConvertSelection => Some(CorrectionRequest::ConvertSelection),
-                            HotkeyEvent::ConvertLastWord => Some(CorrectionRequest::ConvertLastWord),
-                            HotkeyEvent::ConvertTerminal => Some(CorrectionRequest::ConvertTerminal),
                             HotkeyEvent::ToggleEnabled => None,
                         };
                         if he == HotkeyEvent::ToggleEnabled {

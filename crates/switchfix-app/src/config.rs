@@ -77,10 +77,6 @@ impl Default for General {
 pub struct Hotkeys {
     #[serde(default = "hk_sel")]
     pub convert_selection: String,
-    #[serde(default = "hk_word")]
-    pub convert_last_word: String,
-    #[serde(default = "hk_term")]
-    pub convert_terminal: String,
     #[serde(default = "hk_toggle")]
     pub toggle_enabled: String,
     #[serde(default = "def_false")]
@@ -94,12 +90,6 @@ pub struct Hotkeys {
 fn hk_sel() -> String {
     "ctrl+f1".into()
 }
-fn hk_word() -> String {
-    "ctrl+f2".into()
-}
-fn hk_term() -> String {
-    "ctrl+shift+f1".into()
-}
 fn hk_toggle() -> String {
     "ctrl+pause".into()
 }
@@ -108,8 +98,6 @@ impl Default for Hotkeys {
     fn default() -> Self {
         Self {
             convert_selection: hk_sel(),
-            convert_last_word: hk_word(),
-            convert_terminal: hk_term(),
             toggle_enabled: hk_toggle(),
             use_portal_hotkeys: false,
             hotkey_consume: true,
@@ -270,8 +258,6 @@ impl AppConfig {
 
         for (field, value) in [
             ("hotkeys.convert_selection", &self.hotkeys.convert_selection),
-            ("hotkeys.convert_last_word", &self.hotkeys.convert_last_word),
-            ("hotkeys.convert_terminal", &self.hotkeys.convert_terminal),
             ("hotkeys.toggle_enabled", &self.hotkeys.toggle_enabled),
         ] {
             // Empty = action disabled (Esc reset in the settings UI).

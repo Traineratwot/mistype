@@ -57,8 +57,6 @@ sg input -c './target/release/switchfix daemon'
 | Action | Default key |
 |--------|-------------|
 | Convert selection | `ctrl+f1` |
-| Convert last word | `ctrl+f2` |
-| Convert terminal | `ctrl+shift+f1` |
 | Toggle enabled | `ctrl+pause` |
 
 The live config may differ (e.g. `insert`) — always check `switchfix doctor`.
@@ -182,7 +180,7 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 | **arboard `set_text` drops the offer** | Wayland/X11 clipboard is hosted by the owner process; dropping `Clipboard` (or `wl-clipboard-rs` fork from a MT daemon) makes Ctrl+V paste **empty** and **deletes the selection** | Prefer `wl-copy` (daemonizes a child). Keep an arboard owner thread. Always `get_text()`-verify before Ctrl+V; if missing, `type_text` over the selection. |
 | **Never grab our own uinput** | Injected Ctrl+C/Ctrl+V are eaten by the evdev loop | Skip devices named `switchfix*` in `evdev_hotkey.rs`. |
 | **Copy chord order** | Ctrl+C is SIGINT in Konsole | Capture tries Ctrl+Insert → Ctrl+Shift+C → Ctrl+C. Never lead with Ctrl+C. |
-| **Last-word fallback on empty capture** | `backspace(n)` with an active selection wipes it | `ConvertSelection` with `Ok(None)` returns `NoInputFound`. Use `ConvertLastWord` for the word path. |
+| **Last-word fallback on empty capture** | `backspace(n)` with an active selection wipes it | `ConvertSelection` with `Ok(None)` returns `NoInputFound`. No word path. |
 | **`type_text` keymap is incomplete** | After `backspace`, a failed `type_text` leaves nothing | Word replace prefers clipboard paste (`replace_word_via_paste`); `type_text` is fallback only. |
 | **Focus monitor is best-effort** | KWin `getWindowInfo` often returns `{}`; `queryWindowInfo` is interactive | `FocusMonitor` = xprop then KWin; `None` → generic GUI path, never block. |
 | **`switchfix.capture-pause`** | Settings capture must not trigger real hotkeys | Daemon drains the hotkey queue while the file exists. Remove on capture end/exit. |
@@ -219,7 +217,7 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 `AppConfig` in `switchfix-app/src/config.rs` (`Default` + `validate()`):
 
 - `general.enabled_on_start`, `language`
-- `hotkeys.convert_selection / convert_last_word / convert_terminal / toggle_enabled`
+- `hotkeys.convert_selection / toggle_enabled`
   — grammar `ctrl+shift+f1`, `insert`, `capslock`, `home`, … (`HotkeyBinding::parse`)
   — **empty string = action disabled** (Esc in Settings resets the field)
 - `hotkeys.hotkey_consume` (default **true**) — EVIOCGRAB + passthrough

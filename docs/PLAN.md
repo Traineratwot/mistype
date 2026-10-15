@@ -85,7 +85,7 @@ Tray-утилита для **Kubuntu (Debian + KDE Plasma 6, Wayland-only MVP)**
 | **evdev passive** | Полный контроль + keystroke-буфер | Группа `input` | ✅ **Primary** |
 | KDE KGlobalAccel D-Bus | Виден в System Settings | KDE-only, сложнее API | Fallback |
 
-**Дефолтные хоткеи:** `Ctrl+F1` selection · `Ctrl+F2` last word · `Ctrl+Shift+F1` terminal · `Ctrl+Pause` toggle.
+**Дефолтные хоткеи:** `Ctrl+F1` selection · `Ctrl+Pause` toggle.
 
 Pass-through (не consume) + settle-delay; опция `hotkey_consume` (EVIOCGRAB) — не дефолт.
 
@@ -219,7 +219,7 @@ detect_direction(text) -> Option<(LayoutId, LayoutId)>
 convert(text, tables) -> Option<ConvertedText>
 WordSpan { text, char_len }
 
-CorrectionRequest::{ ConvertSelection, ConvertLastWord, ConvertTerminal }
+CorrectionRequest::{ ConvertSelection, ConvertTerminal }
 CorrectionOutcome::{ Converted{..}, NoInputFound, Disabled, Failed(..) }
 CorrectionState::{ Idle, Capturing, Converting, Replacing,
                    SwitchingLayout, RestoringClipboard, Error{recoverable} }
@@ -266,7 +266,7 @@ SOLID: **S** — узкие модули · **O** — новые LayoutSwitcher/
 | # | Сценарий | Ожидание |
 |---|----------|----------|
 | M1 | Выделить `ghbdtn`, Ctrl+F1 | `привет`, layout=RU |
-| M2 | Без выделения, Ctrl+F2 | last word |
+| M2 | Без выделения | NoInputFound (нет пути last word) |
 | M3 | Пустое выделение | NoInputFound, clipboard ok |
 | M4 | Mixed `hello мир` | convert по detect_direction |
 | M5 | Password-поле | skip / exclude list |
@@ -297,18 +297,15 @@ Capturing → enabled? → save clipboard → put(marker) → chord(Ctrl+Insert)
 → Idle
 ```
 
-### Convert last word (`Ctrl+F2`)
+### Convert last word
 
-```
-span = buffer.take_last_word()  // None → NoInputFound (clipboard не трогаем)
-converted = convert(span)
-injector.backspace(span.char_len) → type_text(converted, target_layout)
-layouts.set(target) → buffer.clear()
-```
+**Removed** — selection-only convert. No Backspace fallback (it would wipe an
+active selection). Terminal apps use ConvertTerminal automatically.
 
-### Terminal (`Ctrl+Shift+F1`)
+### Terminal (auto, no hotkey)
 
-Как last word, но Replacing = `Ctrl+A`, `Ctrl+K`, `Ctrl+Shift+V` (опция `terminal_erase`).
+When the focused app matches `behavior.terminal_apps`, ConvertSelection uses
+`Ctrl+A`, `Ctrl+K`, `Ctrl+Shift+V` (опция `terminal_erase`).
 
 ### Toggle / Settings / Quit
 
@@ -464,8 +461,6 @@ tray_icon_style = "color"
 
 [hotkeys]
 convert_selection = "ctrl+f1"
-convert_last_word = "ctrl+f2"
-convert_terminal = "ctrl+shift+f1"
 toggle_enabled = "ctrl+pause"
 use_portal_hotkeys = false
 

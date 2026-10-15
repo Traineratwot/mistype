@@ -30,8 +30,6 @@ pub struct SettingsApp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyField {
     Selection,
-    Word,
-    Terminal,
     Toggle,
 }
 
@@ -93,8 +91,6 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
         Message::ClearHotkey(field) => {
             match field {
                 HotkeyField::Selection => app.cfg.hotkeys.convert_selection = String::new(),
-                HotkeyField::Word => app.cfg.hotkeys.convert_last_word = String::new(),
-                HotkeyField::Terminal => app.cfg.hotkeys.convert_terminal = String::new(),
                 HotkeyField::Toggle => app.cfg.hotkeys.toggle_enabled = String::new(),
             }
             app.capturing = None;
@@ -140,8 +136,6 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
             };
             match field {
                 HotkeyField::Selection => app.cfg.hotkeys.convert_selection = combo.clone(),
-                HotkeyField::Word => app.cfg.hotkeys.convert_last_word = combo.clone(),
-                HotkeyField::Terminal => app.cfg.hotkeys.convert_terminal = combo.clone(),
                 HotkeyField::Toggle => app.cfg.hotkeys.toggle_enabled = combo.clone(),
             }
             app.capturing = None;
@@ -437,15 +431,11 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
     ]
     .spacing(12);
 
-    let mod_hint = if capturing.is_some() {
-        column![
-            text("Модификаторы (галочки добавляются к нажатой клавише):").size(12),
-            mod_row,
-        ]
-        .spacing(6)
-    } else {
-        column![].spacing(0)
-    };
+    let mod_hint = column![
+        text("Модификаторы (добавляются к нажатой клавише при захвате):").size(12),
+        mod_row,
+    ]
+    .spacing(6);
 
     let hotkeys = column![
         text("Что делает SwitchFix").size(20),
@@ -461,28 +451,12 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
             "Исправить выделенный текст",
             "Выделите текст мышкой и нажмите сочетание — \
              выделение заменится на исправленное, а раскладка переключится. \
-             Пример: выделить «ghbdtn» → станет «привет».",
+             Пример: выделить «ghbdtn» → станет «привет». \
+             В терминале (konsole, kitty, …) SwitchFix сам очищает строку \
+             и вставляет через Ctrl+Shift+V.",
             &cfg.hotkeys.convert_selection,
             HotkeyField::Selection,
             capturing == Some(HotkeyField::Selection),
-        ),
-        hotkey_row(
-            "Исправить последнее слово",
-            "Слово, которое вы только что набрали (без выделения), \
-             заменяется на исправленное. Работает, когда курсор в конце слова. \
-             Пример: набрали «ghbdtn» → станет «привет».",
-            &cfg.hotkeys.convert_last_word,
-            HotkeyField::Word,
-            capturing == Some(HotkeyField::Word),
-        ),
-        hotkey_row(
-            "Исправить в терминале (необязательно)",
-            "Обычно не нужно: SwitchFix сам определяет терминал \
-             (konsole, kitty, …) по имени процесса и использует \
-             очистку строки + Ctrl+Shift+V. Клавиша — только ручной override.",
-            &cfg.hotkeys.convert_terminal,
-            HotkeyField::Terminal,
-            capturing == Some(HotkeyField::Terminal),
         ),
         hotkey_row(
             "Пауза / продолжить",
@@ -527,8 +501,7 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
             .on_toggle(Message::ToggleTypingBuffer),
             container(
                 text(
-                    "Нужно для команды «Исправить последнее слово» (Ctrl+F2). \
-                     Символы хранятся только в оперативной памяти \
+                    "Символы хранятся только в оперативной памяти \
                      и очищаются при паузе или выходе. Отключите, \
                      если не хотите, чтобы программа запоминала ввод."
                 )

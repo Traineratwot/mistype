@@ -117,9 +117,6 @@ pub fn spawn_tray_dispatcher(
                 TrayCommand::ConvertSelection => {
                     let _ = service.handle(CorrectionRequest::ConvertSelection).await;
                 }
-                TrayCommand::ConvertLastWord => {
-                    let _ = service.handle(CorrectionRequest::ConvertLastWord).await;
-                }
                 TrayCommand::OpenSettings => on_settings(),
                 TrayCommand::Quit => {
                     on_quit();

@@ -75,32 +75,11 @@ async fn no_selection_no_word_is_no_input() {
     assert!(!h.clipboard.log.contains("put:"));
 }
 
-/// Convert last word: backspace×N → paste (Ctrl+V) → restore → set(layout).
-#[tokio::test]
-async fn convert_last_word_order() {
-    let h = harness(HarnessOptions {
-        word: Some("руддщ".into()),
-        clipboard_text: Some("keep-me".into()),
-        ..Default::default()
-    });
-
-    let out = h.service.handle(CorrectionRequest::ConvertLastWord).await;
-    assert!(out.is_success(), "{out:?}");
-    h.events.assert_order("take_last_word", "backspace:5");
-    h.events.assert_order("backspace:5", "put:hello");
-    h.events.assert_order("put:hello", "chord:CtrlV");
-    // Clipboard is restored after paste.
-    assert_eq!(
-        h.clipboard.text.lock().unwrap().as_deref(),
-        Some("keep-me")
-    );
-}
-
 /// Terminal mode: chord(Ctrl+A), (Ctrl+K), (Ctrl+Shift+V).
 #[tokio::test]
 async fn terminal_chords_order() {
     let h = harness(HarnessOptions {
-        word: Some("ghbdtn".into()),
+        selected: Some("ghbdtn".into()),
         ..Default::default()
     });
 
@@ -116,12 +95,12 @@ async fn terminal_chords_order() {
 #[tokio::test]
 async fn layout_fail_keeps_text() {
     let h = harness(HarnessOptions {
-        word: Some("ghbdtn".into()),
+        selected: Some("ghbdtn".into()),
         layout_fail: true,
         ..Default::default()
     });
 
-    let out = h.service.handle(CorrectionRequest::ConvertLastWord).await;
+    let out = h.service.handle(CorrectionRequest::ConvertSelection).await;
     assert!(out.is_success(), "conversion must succeed even if layout fails: {out:?}");
     // Word is pasted (or typed) despite layout failure.
     assert!(
@@ -161,15 +140,14 @@ async fn clipboard_restore_fail_keeps_text() {
 #[tokio::test]
 async fn toggle_disabled_skips_injector() {
     let h = harness(HarnessOptions {
-        word: Some("ghbdtn".into()),
+        selected: Some("ghbdtn".into()),
         enabled: false,
         ..Default::default()
     });
 
-    let out = h.service.handle(CorrectionRequest::ConvertLastWord).await;
+    let out = h.service.handle(CorrectionRequest::ConvertSelection).await;
     assert_eq!(out, CorrectionOutcome::Disabled);
     assert!(h.injector.log.all().is_empty(), "injector must stay silent");
-    assert!(h.buffer.word.lock().unwrap().is_some(), "buffer not cleared");
 }
 
 /// Toggle clears the typing buffer (privacy).
