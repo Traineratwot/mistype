@@ -39,6 +39,8 @@ enum Command {
     },
     /// Toggle enabled/paused state of a running daemon (via file flag for now).
     Toggle,
+    /// Play the hotkey feedback sound (and print a note) — smoke-test audio.
+    Beep,
 }
 
 #[tokio::main]
@@ -106,6 +108,13 @@ async fn main() -> anyhow::Result<()> {
             std::fs::write(&path, if next { "1" } else { "0" })?;
             println!("{}", if next { "enabled" } else { "paused" });
         }
+        Command::Beep => {
+            println!("playing hotkey feedback sound…");
+            switchfix_ui::play_hotkey_sound();
+            // Give the player a moment so the process isn't killed on exit.
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            println!("done (if you heard nothing, install canberra-gtk-play or paplay)");
+        }
         Command::Daemon => {
             run_daemon().await?;
         }
@@ -165,6 +174,11 @@ async fn run_daemon() -> anyhow::Result<()> {
                 match ev {
                     Some(he) => {
                         use switchfix_app::ports::HotkeyEvent;
+                        info!("hotkey received: {he:?}");
+                        // Immediate feedback: blink tray + short sound.
+                        tray_handle.flash(switchfix_ui::FLASH_DURATION);
+                        switchfix_ui::play_hotkey_sound();
+
                         let req = match he {
                             HotkeyEvent::ConvertSelection => Some(CorrectionRequest::ConvertSelection),
                             HotkeyEvent::ConvertLastWord => Some(CorrectionRequest::ConvertLastWord),

@@ -1,7 +1,11 @@
 //! System tray icon via StatusNotifierItem (ksni) — native KDE tray.
+//!
+//! Flashes the icon briefly when a hotkey fires so the user can see that
+//! SwitchFix received the keyboard event.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use ksni::menu::{MenuItem, StandardItem};
 use ksni::{Icon, ToolTip, Tray};
@@ -21,6 +25,8 @@ pub enum TrayCommand {
 /// Shared state between daemon and tray.
 pub struct TrayModel {
     pub enabled: AtomicBool,
+    /// On while the icon should blink after a hotkey.
+    pub flash: AtomicBool,
     pub cmd_tx: mpsc::Sender<TrayCommand>,
 }
 
@@ -28,6 +34,7 @@ impl TrayModel {
     pub fn new(cmd_tx: mpsc::Sender<TrayCommand>, enabled: bool) -> Arc<Self> {
         Arc::new(Self {
             enabled: AtomicBool::new(enabled),
+            flash: AtomicBool::new(false),
             cmd_tx,
         })
     }
@@ -39,23 +46,47 @@ impl TrayModel {
     pub fn set_enabled(&self, on: bool) {
         self.enabled.store(on, Ordering::SeqCst);
     }
+
+    pub fn is_flashing(&self) -> bool {
+        self.flash.load(Ordering::SeqCst)
+    }
 }
 
 pub struct SwitchFixTray {
     pub model: Arc<TrayModel>,
 }
 
-/// Handle kept so the tray stays alive.
+/// Handle kept so the tray stays alive. Also allows forcing a redraw (flash).
 pub struct TrayHandle {
+    model: Arc<TrayModel>,
+    handle: ksni::Handle<SwitchFixTray>,
     _worker: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl TrayHandle {
+    /// Light up the tray icon for `duration` (hotkey feedback).
+    pub fn flash(&self, duration: Duration) {
+        self.model.flash.store(true, Ordering::SeqCst);
+        self.handle.update(|_| ());
+
+        let model = self.model.clone();
+        let handle = self.handle.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(duration).await;
+            model.flash.store(false, Ordering::SeqCst);
+            handle.update(|_| ());
+        });
+    }
+
     pub fn abort(self) {
         if let Some(h) = self._worker {
             h.abort();
         }
     }
+}
+
+fn flash_color() -> (u8, u8, u8) {
+    (0xff, 0xc1, 0x07) // amber — clearly different from green/gray
 }
 
 impl Tray for SwitchFixTray {
@@ -68,7 +99,9 @@ impl Tray for SwitchFixTray {
     }
 
     fn icon_name(&self) -> String {
-        if self.model.is_enabled() {
+        if self.model.is_flashing() {
+            "notification-message-im".into()
+        } else if self.model.is_enabled() {
             "input-keyboard".into()
         } else {
             "media-playback-pause".into()
@@ -76,7 +109,9 @@ impl Tray for SwitchFixTray {
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
-        let (r, g, b) = if self.model.is_enabled() {
+        let (r, g, b) = if self.model.is_flashing() {
+            flash_color()
+        } else if self.model.is_enabled() {
             (0x2e, 0xcc, 0x71)
         } else {
             (0x88, 0x88, 0x88)
@@ -97,7 +132,9 @@ impl Tray for SwitchFixTray {
             icon_name: self.icon_name(),
             icon_pixmap: self.icon_pixmap(),
             title: "SwitchFix".into(),
-            description: if self.model.is_enabled() {
+            description: if self.model.is_flashing() {
+                "Горячая клавиша…".into()
+            } else if self.model.is_enabled() {
                 "Включён".into()
             } else {
                 "Приостановлен".into()
@@ -165,14 +202,17 @@ pub async fn spawn_tray(model: Arc<TrayModel>) -> Result<TrayHandle, String> {
     service.spawn();
     info!("tray started");
 
+    let keep = handle.clone();
     let worker = tokio::spawn(async move {
-        let _keep = handle;
+        let _keep = keep;
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            tokio::time::sleep(Duration::from_secs(3600)).await;
         }
     });
 
     Ok(TrayHandle {
+        model,
+        handle,
         _worker: Some(worker),
     })
 }

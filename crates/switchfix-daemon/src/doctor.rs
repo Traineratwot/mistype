@@ -190,5 +190,19 @@ pub async fn run() -> DoctorReport {
         cfg_path.display().to_string(),
     ));
 
+    // Sound player for hotkey feedback (optional but recommended).
+    let sound_ok = ["canberra-gtk-play", "paplay", "pw-play"]
+        .iter()
+        .any(|b| std::process::Command::new(b).arg("--help").output().is_ok());
+    lines.push((
+        "sound player".into(),
+        sound_ok,
+        if sound_ok {
+            "ok (canberra-gtk-play / paplay / pw-play)".into()
+        } else {
+            "none found — hotkey will only blink the tray icon".into()
+        },
+    ));
+
     DoctorReport { lines }
 }
