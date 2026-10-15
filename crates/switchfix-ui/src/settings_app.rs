@@ -18,19 +18,34 @@ pub struct SettingsApp {
     status: String,
     /// Which hotkey field is currently waiting for a key combination.
     capturing: Option<HotkeyField>,
-    /// Forced modifiers while capturing (checkboxes). Empty = use pressed mods.
-    force_ctrl: bool,
-    force_alt: bool,
-    force_shift: bool,
-    force_meta: bool,
+    /// Forced modifiers per hotkey (checkboxes next to that combo only).
+    mods_selection: HotkeyMods,
+    mods_toggle: HotkeyMods,
     /// Daemon pause flag written while capturing so hotkeys don't fire.
     paused_for_capture: bool,
+}
+
+/// Modifier checkboxes bound to a single hotkey (not global).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HotkeyMods {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub meta: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyField {
     Selection,
     Toggle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModKey {
+    Ctrl,
+    Alt,
+    Shift,
+    Meta,
 }
 
 #[derive(Debug, Clone)]
@@ -43,10 +58,8 @@ pub enum Message {
     CancelCapture,
     ClearHotkey(HotkeyField),
     KeyPressed(Key, Modifiers),
-    ForceCtrl(bool),
-    ForceAlt(bool),
-    ForceShift(bool),
-    ForceMeta(bool),
+    /// Toggle a modifier checkbox for one specific hotkey.
+    SetMod(HotkeyField, ModKey, bool),
     Save,
     Close,
 }
@@ -76,6 +89,16 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
                 write_capture_pause(true);
                 app.paused_for_capture = true;
             }
+            // Seed checkboxes from the current combo so they match the binding.
+            let current = match field {
+                HotkeyField::Selection => app.cfg.hotkeys.convert_selection.clone(),
+                HotkeyField::Toggle => app.cfg.hotkeys.toggle_enabled.clone(),
+            };
+            let m = mods_from_combo(&current);
+            match field {
+                HotkeyField::Selection => app.mods_selection = m,
+                HotkeyField::Toggle => app.mods_toggle = m,
+            }
             app.capturing = Some(field);
             app.status =
                 "Нажмите сочетание… (Esc — сбросить клавишу, кнопка «Отмена» — выйти)".into();
@@ -90,8 +113,14 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
         }
         Message::ClearHotkey(field) => {
             match field {
-                HotkeyField::Selection => app.cfg.hotkeys.convert_selection = String::new(),
-                HotkeyField::Toggle => app.cfg.hotkeys.toggle_enabled = String::new(),
+                HotkeyField::Selection => {
+                    app.cfg.hotkeys.convert_selection = String::new();
+                    app.mods_selection = HotkeyMods::default();
+                }
+                HotkeyField::Toggle => {
+                    app.cfg.hotkeys.toggle_enabled = String::new();
+                    app.mods_toggle = HotkeyMods::default();
+                }
             }
             app.capturing = None;
             if app.paused_for_capture {
@@ -100,10 +129,31 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
             }
             app.status = "Клавиша сброшена (действие отключено)".into();
         }
-        Message::ForceCtrl(v) => app.force_ctrl = v,
-        Message::ForceAlt(v) => app.force_alt = v,
-        Message::ForceShift(v) => app.force_shift = v,
-        Message::ForceMeta(v) => app.force_meta = v,
+        Message::SetMod(field, key, on) => {
+            let mods = match field {
+                HotkeyField::Selection => &mut app.mods_selection,
+                HotkeyField::Toggle => &mut app.mods_toggle,
+            };
+            match key {
+                ModKey::Ctrl => mods.ctrl = on,
+                ModKey::Alt => mods.alt = on,
+                ModKey::Shift => mods.shift = on,
+                ModKey::Meta => mods.meta = on,
+            }
+            // Rewrite the stored combo with the same base key + new modifiers.
+            let current = match field {
+                HotkeyField::Selection => app.cfg.hotkeys.convert_selection.clone(),
+                HotkeyField::Toggle => app.cfg.hotkeys.toggle_enabled.clone(),
+            };
+            if let Some(base) = combo_base_key(&current) {
+                let combo = combo_from_mods(mods, base);
+                match field {
+                    HotkeyField::Selection => app.cfg.hotkeys.convert_selection = combo.clone(),
+                    HotkeyField::Toggle => app.cfg.hotkeys.toggle_enabled = combo.clone(),
+                }
+                app.status = format!("Установлено: {}", pretty_hotkey(&combo));
+            }
+        }
         Message::KeyPressed(key, modifiers) => {
             let Some(field) = app.capturing else {
                 return Task::none();
@@ -112,18 +162,22 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
             if key == Key::Named(iced::keyboard::key::Named::Escape) {
                 return update(app, Message::ClearHotkey(field));
             }
-            // Merge checkbox-forced modifiers with live ones.
+            // Merge this hotkey's checkbox modifiers with live ones.
+            let forced = match field {
+                HotkeyField::Selection => app.mods_selection,
+                HotkeyField::Toggle => app.mods_toggle,
+            };
             let mut mods = modifiers;
-            if app.force_ctrl {
+            if forced.ctrl {
                 mods |= Modifiers::CTRL;
             }
-            if app.force_alt {
+            if forced.alt {
                 mods |= Modifiers::ALT;
             }
-            if app.force_shift {
+            if forced.shift {
                 mods |= Modifiers::SHIFT;
             }
-            if app.force_meta {
+            if forced.meta {
                 mods |= Modifiers::LOGO;
             }
             let Some(combo) = combo_from_key(&key, mods) else {
@@ -137,6 +191,12 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
             match field {
                 HotkeyField::Selection => app.cfg.hotkeys.convert_selection = combo.clone(),
                 HotkeyField::Toggle => app.cfg.hotkeys.toggle_enabled = combo.clone(),
+            }
+            // Keep checkboxes in sync with what was just bound.
+            let m = mods_from_combo(&combo);
+            match field {
+                HotkeyField::Selection => app.mods_selection = m,
+                HotkeyField::Toggle => app.mods_toggle = m,
             }
             app.capturing = None;
             if app.paused_for_capture {
@@ -351,16 +411,68 @@ fn pretty_hotkey(combo: &str) -> String {
         .join("+")
 }
 
-/// Title + capture button + hover hint for one hotkey.
+/// Parse `ctrl+alt+k` → HotkeyMods { ctrl, alt, .. }.
+fn mods_from_combo(combo: &str) -> HotkeyMods {
+    let mut m = HotkeyMods::default();
+    for p in combo.split('+') {
+        match p.trim().to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => m.ctrl = true,
+            "alt" => m.alt = true,
+            "shift" => m.shift = true,
+            "meta" | "super" | "mod" => m.meta = true,
+            _ => {}
+        }
+    }
+    m
+}
+
+/// Last non-modifier part of a combo (`ctrl+shift+f1` → `f1`).
+fn combo_base_key(combo: &str) -> Option<&str> {
+    combo
+        .split('+')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .filter(|p| {
+            !matches!(
+                p.to_ascii_lowercase().as_str(),
+                "ctrl" | "control" | "alt" | "shift" | "meta" | "super" | "mod"
+            )
+        })
+        .next_back()
+}
+
+/// Build combo from per-hotkey modifiers + base key name.
+fn combo_from_mods(mods: &HotkeyMods, base: &str) -> String {
+    let mut parts = Vec::new();
+    if mods.ctrl {
+        parts.push("ctrl");
+    }
+    if mods.alt {
+        parts.push("alt");
+    }
+    if mods.shift {
+        parts.push("shift");
+    }
+    if mods.meta {
+        parts.push("meta");
+    }
+    parts.push(base);
+    parts.join("+")
+}
+
+/// Per-hotkey row: title, capture button, and its own modifier checkboxes.
 fn hotkey_row<'a>(
     title: &'a str,
     hint: &'a str,
     value: &'a str,
     field: HotkeyField,
     capturing: bool,
+    mods: HotkeyMods,
 ) -> Element<'a, Message> {
     let btn_label = if capturing {
         "… нажмите сочетание (Esc — отмена)".to_string()
+    } else if value.trim().is_empty() {
+        "— не назначено —".to_string()
     } else {
         pretty_hotkey(value)
     };
@@ -370,7 +482,7 @@ fn hotkey_row<'a>(
     let capture = mouse_area(
         container(text(btn_label).size(14))
             .padding([8, 14])
-            .width(Length::Fixed(240.0))
+            .width(Length::Fixed(220.0))
             .style(if capturing {
                 container::rounded_box
             } else {
@@ -379,10 +491,24 @@ fn hotkey_row<'a>(
     )
     .on_press(Message::StartCapture(field));
 
+    let mod_boxes = row![
+        checkbox("Ctrl", mods.ctrl).on_toggle(move |v| Message::SetMod(field, ModKey::Ctrl, v)),
+        checkbox("Alt", mods.alt).on_toggle(move |v| Message::SetMod(field, ModKey::Alt, v)),
+        checkbox("Shift", mods.shift).on_toggle(move |v| Message::SetMod(field, ModKey::Shift, v)),
+        checkbox("Meta", mods.meta).on_toggle(move |v| Message::SetMod(field, ModKey::Meta, v)),
+    ]
+    .spacing(10);
+
     let label = text(title).width(Length::Fixed(200.0));
 
     tooltip(
-        row![label, capture].spacing(12).align_y(iced::Alignment::Center),
+        column![
+            row![label, capture].spacing(12).align_y(iced::Alignment::Center),
+            row![text("").width(Length::Fixed(200.0)), mod_boxes]
+                .spacing(12)
+                .align_y(iced::Alignment::Center),
+        ]
+        .spacing(4),
         container(text(hint).size(13))
             .padding(10)
             .width(Length::Fixed(340.0))
@@ -423,25 +549,12 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
         row![].spacing(0)
     };
 
-    let mod_row = row![
-        checkbox("Ctrl", app.force_ctrl).on_toggle(Message::ForceCtrl),
-        checkbox("Alt", app.force_alt).on_toggle(Message::ForceAlt),
-        checkbox("Shift", app.force_shift).on_toggle(Message::ForceShift),
-        checkbox("Meta", app.force_meta).on_toggle(Message::ForceMeta),
-    ]
-    .spacing(12);
-
-    let mod_hint = column![
-        text("Модификаторы (добавляются к нажатой клавише при захвате):").size(12),
-        mod_row,
-    ]
-    .spacing(6);
-
     let hotkeys = column![
         text("Что делает SwitchFix").size(20),
         text(
             "Исправляет текст, набранный не той раскладкой: ghbdtn → привет. \
-             Нажмите на комбинацию справа и задайте свои клавиши."
+             Нажмите на комбинацию и задайте клавиши. \
+             Галочки модификаторов — свои для каждого сочетания."
         )
         .size(13),
         iced::widget::Space::with_height(8.0),
@@ -457,6 +570,7 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
             &cfg.hotkeys.convert_selection,
             HotkeyField::Selection,
             capturing == Some(HotkeyField::Selection),
+            app.mods_selection,
         ),
         hotkey_row(
             "Пауза / продолжить",
@@ -465,9 +579,9 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
             &cfg.hotkeys.toggle_enabled,
             HotkeyField::Toggle,
             capturing == Some(HotkeyField::Toggle),
+            app.mods_toggle,
         ),
         cancel_btn,
-        mod_hint,
         tooltip(
             checkbox(
                 "Полностью перехватывать назначенные клавиши",
@@ -549,15 +663,15 @@ pub fn run_settings(store: Box<dyn ConfigStore + Send + Sync>) -> iced::Result {
     }
 
     let cfg = store.load().unwrap_or_default();
+    let mods_selection = mods_from_combo(&cfg.hotkeys.convert_selection);
+    let mods_toggle = mods_from_combo(&cfg.hotkeys.toggle_enabled);
     let app = SettingsApp {
         cfg,
         store,
         status: String::new(),
         capturing: None,
-        force_ctrl: false,
-        force_alt: false,
-        force_shift: false,
-        force_meta: false,
+        mods_selection,
+        mods_toggle,
         paused_for_capture: false,
     };
 
@@ -620,5 +734,31 @@ mod tests {
         assert_eq!(pretty_hotkey("ctrl+shift+f1"), "Ctrl+Shift+F1");
         assert_eq!(pretty_hotkey("ctrl+pause"), "Ctrl+Pause");
         assert_eq!(pretty_hotkey("alt+space"), "Alt+Space");
+    }
+
+    #[test]
+    fn mods_from_combo_parses_flags() {
+        let m = mods_from_combo("ctrl+alt+k");
+        assert!(m.ctrl && m.alt && !m.shift && !m.meta);
+        let m = mods_from_combo("capslock");
+        assert!(!m.ctrl && !m.alt && !m.shift && !m.meta);
+    }
+
+    #[test]
+    fn combo_base_key_skips_modifiers() {
+        assert_eq!(combo_base_key("ctrl+shift+f1"), Some("f1"));
+        assert_eq!(combo_base_key("insert"), Some("insert"));
+        assert_eq!(combo_base_key("ctrl+"), None);
+    }
+
+    #[test]
+    fn combo_from_mods_roundtrip() {
+        let m = HotkeyMods {
+            ctrl: true,
+            alt: false,
+            shift: true,
+            meta: false,
+        };
+        assert_eq!(combo_from_mods(&m, "f1"), "ctrl+shift+f1");
     }
 }
