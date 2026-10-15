@@ -1,4 +1,4 @@
-//! Global hotkeys + keystroke buffer via evdev.
+//! Global hotkeys via evdev (Linux).
 //!
 //! Modes:
 //! - **passive** (default when `hotkey_consume = false`): listen only; the OS
@@ -7,123 +7,15 @@
 //!   never reaches other apps. Non-hotkey keys are re-injected through uinput so
 //!   normal typing keeps working.
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use evdev::{Device, EventType, InputEvent, KeyCode};
 use switchfix_app::hotkey::HotkeyBinding;
-use switchfix_app::ports::{HotkeyEvent, HotkeySource, TypingBufferPort};
-use switchfix_domain::WordSpan;
+use switchfix_app::ports::{HotkeyEvent, HotkeySource};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-/// Shared keystroke buffer (RAM only).
-#[derive(Debug)]
-pub struct SharedTypingBuffer {
-    chars: Mutex<VecDeque<char>>,
-    max: usize,
-    enabled: AtomicBool,
-}
-
-impl SharedTypingBuffer {
-    pub fn new(max: usize, enabled: bool) -> Arc<Self> {
-        Arc::new(Self {
-            chars: Mutex::new(VecDeque::with_capacity(max.min(256))),
-            max: max.max(1),
-            enabled: AtomicBool::new(enabled),
-        })
-    }
-
-    pub fn push(&self, c: char) {
-        if !self.enabled.load(Ordering::SeqCst) {
-            return;
-        }
-        let mut g = self.chars.lock().unwrap();
-        if g.len() >= self.max {
-            g.pop_front();
-        }
-        g.push_back(c);
-    }
-
-    pub fn pop(&self) {
-        self.chars.lock().unwrap().pop_back();
-    }
-
-    pub fn clear(&self) {
-        self.chars.lock().unwrap().clear();
-    }
-
-    fn is_sep(c: char) -> bool {
-        c.is_whitespace()
-            || matches!(
-                c,
-                ',' | '.' | ';'
-                    | ':'
-                    | '!'
-                    | '?'
-                    | '('
-                    | ')'
-                    | '['
-                    | ']'
-                    | '{'
-                    | '}'
-                    | '"'
-                    | '\''
-                    | '/'
-                    | '\\'
-            )
-    }
-
-    pub fn take_last_word(&self) -> Option<WordSpan> {
-        if !self.enabled.load(Ordering::SeqCst) {
-            return None;
-        }
-        let mut g = self.chars.lock().unwrap();
-
-        while g.back().is_some_and(|c| Self::is_sep(*c)) {
-            g.pop_back();
-        }
-        if g.is_empty() {
-            return None;
-        }
-
-        let mut word = String::new();
-        while let Some(c) = g.back() {
-            if Self::is_sep(*c) {
-                break;
-            }
-            word.insert(0, *c);
-            g.pop_back();
-        }
-
-        if word.is_empty() {
-            return None;
-        }
-
-        let char_len = word.chars().count();
-        g.clear();
-        Some(WordSpan { text: word, char_len })
-    }
-}
-
-impl TypingBufferPort for SharedTypingBuffer {
-    fn take_last_word(&self) -> Option<WordSpan> {
-        SharedTypingBuffer::take_last_word(self)
-    }
-    fn clear(&self) {
-        SharedTypingBuffer::clear(self);
-    }
-    fn is_enabled(&self) -> bool {
-        self.enabled.load(Ordering::SeqCst)
-    }
-    fn push_char(&self, c: char) {
-        self.push(c);
-    }
-    fn backspace(&self) {
-        self.pop();
-    }
-}
+use crate::platform::portable::typing_buffer::SharedTypingBuffer;
 
 // ----- key name ↔ evdev KeyCode -----
 
@@ -307,13 +199,22 @@ pub struct EvdevOptions {
 impl EvdevHotkeySource {
     pub fn open(buffer: Arc<SharedTypingBuffer>) -> std::io::Result<Self> {
         let defaults = vec![
-            (HotkeyBinding::parse("ctrl+f1").unwrap(), HotkeyEvent::ConvertSelection),
-            (HotkeyBinding::parse("ctrl+f2").unwrap(), HotkeyEvent::ConvertLastWord),
+            (
+                HotkeyBinding::parse("ctrl+f1").unwrap(),
+                HotkeyEvent::ConvertSelection,
+            ),
+            (
+                HotkeyBinding::parse("ctrl+f2").unwrap(),
+                HotkeyEvent::ConvertLastWord,
+            ),
             (
                 HotkeyBinding::parse("ctrl+shift+f1").unwrap(),
                 HotkeyEvent::ConvertTerminal,
             ),
-            (HotkeyBinding::parse("ctrl+pause").unwrap(), HotkeyEvent::ToggleEnabled),
+            (
+                HotkeyBinding::parse("ctrl+pause").unwrap(),
+                HotkeyEvent::ToggleEnabled,
+            ),
         ];
         Self::open_with(EvdevOptions {
             bindings: defaults,
@@ -334,7 +235,10 @@ impl EvdevHotkeySource {
                     event,
                 }),
                 None => {
-                    warn!("hotkey key '{key}' has no evdev code — skipped", key = parsed.key);
+                    warn!(
+                        "hotkey key '{key}' has no evdev code — skipped",
+                        key = parsed.key
+                    );
                 }
             }
         }
@@ -561,41 +465,6 @@ impl HotkeySource for EvdevHotkeySource {
     fn events(&self) -> mpsc::Receiver<HotkeyEvent> {
         let mut g = self.rx.lock().unwrap();
         g.take().unwrap_or_else(|| {
-            let (_tx, rx) = mpsc::channel(1);
-            rx
-        })
-    }
-}
-
-/// In-memory hotkey source for tests / fallback when evdev is unavailable.
-pub struct ManualHotkeySource {
-    tx: mpsc::Sender<HotkeyEvent>,
-    rx: Mutex<Option<mpsc::Receiver<HotkeyEvent>>>,
-}
-
-impl ManualHotkeySource {
-    pub fn new() -> Self {
-        let (tx, rx) = mpsc::channel(16);
-        Self {
-            tx,
-            rx: Mutex::new(Some(rx)),
-        }
-    }
-
-    pub fn send(&self, ev: HotkeyEvent) {
-        let _ = self.tx.try_send(ev);
-    }
-}
-
-impl Default for ManualHotkeySource {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl HotkeySource for ManualHotkeySource {
-    fn events(&self) -> mpsc::Receiver<HotkeyEvent> {
-        self.rx.lock().unwrap().take().unwrap_or_else(|| {
             let (_tx, rx) = mpsc::channel(1);
             rx
         })

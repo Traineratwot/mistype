@@ -91,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Settings => {
             let store = switchfix_adapters::TomlConfigStore::open_default();
-            let cfg = switchfix_adapters::config_store::ensure_config(&store);
+            let cfg = switchfix_adapters::ensure_config(&store);
             info!("opening settings (config at {:?})", store.path());
             let _ = cfg;
             switchfix_ui::run_settings(Box::new(store))?;

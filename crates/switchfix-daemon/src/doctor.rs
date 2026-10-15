@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use switchfix_adapters::detect;
+
 pub struct DoctorReport {
     pub lines: Vec<(String, bool, String)>,
 }
@@ -32,136 +34,156 @@ impl DoctorReport {
 pub async fn run() -> DoctorReport {
     let mut lines = Vec::new();
 
-    // Session type
-    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
+    // Platform (OS / desktop / session) — selected by the platform layer.
+    let info = detect();
     lines.push((
-        "session".into(),
-        session == "wayland" || session == "x11",
-        format!("XDG_SESSION_TYPE={session}"),
-    ));
-
-    // Desktop
-    let de = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-    lines.push((
-        "desktop".into(),
-        true,
-        format!("XDG_CURRENT_DESKTOP={de}"),
-    ));
-
-    // /dev/uinput
-    let uinput_ok = Path::new("/dev/uinput").exists();
-    let uinput_writable = std::fs::OpenOptions::new()
-        .write(true)
-        .open("/dev/uinput")
-        .is_ok();
-    lines.push((
-        "uinput".into(),
-        uinput_ok && uinput_writable,
-        if !uinput_ok {
-            "/dev/uinput missing".into()
-        } else if uinput_writable {
-            "/dev/uinput writable".into()
+        "platform".into(),
+        info.supported,
+        if info.supported {
+            format!("{} (supported)", info.id)
         } else {
-            "/dev/uinput exists but not writable (need group 'input' or udev rule)".into()
+            format!(
+                "{} (stub: {})",
+                info.id,
+                info.stub_reason.as_deref().unwrap_or("unsupported")
+            )
         },
     ));
 
-    // /dev/input keyboards
-    let mut kb_count = 0;
-    if let Ok(rd) = std::fs::read_dir("/dev/input") {
-        for e in rd.flatten() {
-            let n = e.file_name();
-            let n = n.to_string_lossy();
-            if n.starts_with("event") {
-                kb_count += 1;
-            }
-        }
-    }
-    lines.push((
-        "input devices".into(),
-        kb_count > 0,
-        format!("{kb_count} /dev/input/event* nodes"),
-    ));
+    #[cfg(target_os = "linux")]
+    {
+        // Session type
+        let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
+        lines.push((
+            "session".into(),
+            session == "wayland" || session == "x11",
+            format!("XDG_SESSION_TYPE={session}"),
+        ));
 
-    // input group — check both the current session and the passwd database.
-    let groups_session = std::process::Command::new("id")
-        .arg("-nG")
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-        .unwrap_or_default();
-    let user = std::env::var("USER").unwrap_or_default();
-    let groups_passwd = std::process::Command::new("id")
-        .arg("-nG")
-        .arg(&user)
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-        .unwrap_or_else(|| groups_session.clone());
-    let has_input_session = groups_session.split_whitespace().any(|g| g == "input");
-    let has_input_passwd = groups_passwd.split_whitespace().any(|g| g == "input");
-    let (input_ok, input_detail) = match (has_input_passwd, has_input_session) {
-        (true, true) => (true, "user is in 'input' group".into()),
-        (true, false) => (
+        // Desktop
+        let de = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+        lines.push((
+            "desktop".into(),
             true,
-            "user is in 'input' group (log out and back in for this session)".into(),
-        ),
-        (false, _) => (
-            false,
-            format!("not in 'input' group (id -nG {user}: {groups_passwd})"),
-        ),
-    };
-    lines.push(("group input".into(), input_ok, input_detail));
+            format!("XDG_CURRENT_DESKTOP={de}"),
+        ));
 
-    // D-Bus org.kde.keyboard
-    let layouts_ok = match zbus::Connection::session().await {
-        Ok(conn) => {
-            use zbus::proxy;
-            #[proxy(
-                interface = "org.kde.KeyboardLayouts",
-                default_service = "org.kde.keyboard",
-                default_path = "/Layouts"
-            )]
-            trait Probe {
-                #[zbus(name = "getLayout")]
-                fn get_layout(&self) -> zbus::Result<u32>;
-                #[zbus(name = "getLayoutsList")]
-                fn get_layouts_list(&self) -> zbus::Result<Vec<(String, String, String)>>;
-                #[zbus(name = "setLayout")]
-                fn set_layout(&self, index: u32) -> zbus::Result<bool>;
-            }
-            match ProbeProxy::new(&conn).await {
-                Ok(p) => match p.get_layouts_list().await {
-                    Ok(list) => {
-                        let names: Vec<_> = list.iter().map(|(s, _, n)| format!("{s}({n})")).collect();
-                        let cur = p.get_layout().await.unwrap_or(999);
-                        // Write probe: setLayout(current) is a safe no-op that
-                        // verifies the set path actually works.
-                        let write_ok = p.set_layout(cur).await.unwrap_or(false);
-                        let write_note = if write_ok {
-                            "setLayout ok"
-                        } else {
-                            "setLayout rejected"
-                        };
-                        (
-                            write_ok,
-                            format!(
-                                "layouts: [{}] current index {cur} ({write_note})",
-                                names.join(", ")
-                            ),
-                        )
-                    }
-                    Err(e) => (false, format!("getLayoutsList failed: {e}")),
-                },
-                Err(e) => (false, format!("proxy failed: {e}")),
+        // /dev/uinput
+        let uinput_ok = Path::new("/dev/uinput").exists();
+        let uinput_writable = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/uinput")
+            .is_ok();
+        lines.push((
+            "uinput".into(),
+            uinput_ok && uinput_writable,
+            if !uinput_ok {
+                "/dev/uinput missing".into()
+            } else if uinput_writable {
+                "/dev/uinput writable".into()
+            } else {
+                "/dev/uinput exists but not writable (need group 'input' or udev rule)".into()
+            },
+        ));
+
+        // /dev/input keyboards
+        let mut kb_count = 0;
+        if let Ok(rd) = std::fs::read_dir("/dev/input") {
+            for e in rd.flatten() {
+                let n = e.file_name();
+                let n = n.to_string_lossy();
+                if n.starts_with("event") {
+                    kb_count += 1;
+                }
             }
         }
-        Err(e) => (false, format!("session bus: {e}")),
-    };
-    lines.push(("org.kde.keyboard".into(), layouts_ok.0, layouts_ok.1));
+        lines.push((
+            "input devices".into(),
+            kb_count > 0,
+            format!("{kb_count} /dev/input/event* nodes"),
+        ));
+
+        // input group — check both the current session and the passwd database.
+        let groups_session = std::process::Command::new("id")
+            .arg("-nG")
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+        let user = std::env::var("USER").unwrap_or_default();
+        let groups_passwd = std::process::Command::new("id")
+            .arg("-nG")
+            .arg(&user)
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_else(|| groups_session.clone());
+        let has_input_session = groups_session.split_whitespace().any(|g| g == "input");
+        let has_input_passwd = groups_passwd.split_whitespace().any(|g| g == "input");
+        let (input_ok, input_detail) = match (has_input_passwd, has_input_session) {
+            (true, true) => (true, "user is in 'input' group".into()),
+            (true, false) => (
+                true,
+                "user is in 'input' group (log out and back in for this session)".into(),
+            ),
+            (false, _) => (
+                false,
+                format!("not in 'input' group (id -nG {user}: {groups_passwd})"),
+            ),
+        };
+        lines.push(("group input".into(), input_ok, input_detail));
+
+        // D-Bus org.kde.keyboard
+        let layouts_ok = match zbus::Connection::session().await {
+            Ok(conn) => {
+                use zbus::proxy;
+                #[proxy(
+                    interface = "org.kde.KeyboardLayouts",
+                    default_service = "org.kde.keyboard",
+                    default_path = "/Layouts"
+                )]
+                trait Probe {
+                    #[zbus(name = "getLayout")]
+                    fn get_layout(&self) -> zbus::Result<u32>;
+                    #[zbus(name = "getLayoutsList")]
+                    fn get_layouts_list(&self) -> zbus::Result<Vec<(String, String, String)>>;
+                    #[zbus(name = "setLayout")]
+                    fn set_layout(&self, index: u32) -> zbus::Result<bool>;
+                }
+                match ProbeProxy::new(&conn).await {
+                    Ok(p) => match p.get_layouts_list().await {
+                        Ok(list) => {
+                            let names: Vec<_> =
+                                list.iter().map(|(s, _, n)| format!("{s}({n})")).collect();
+                            let cur = p.get_layout().await.unwrap_or(999);
+                            // Write probe: setLayout(current) is a safe no-op that
+                            // verifies the set path actually works.
+                            let write_ok = p.set_layout(cur).await.unwrap_or(false);
+                            let write_note = if write_ok {
+                                "setLayout ok"
+                            } else {
+                                "setLayout rejected"
+                            };
+                            (
+                                write_ok,
+                                format!(
+                                    "layouts: [{}] current index {cur} ({write_note})",
+                                    names.join(", ")
+                                ),
+                            )
+                        }
+                        Err(e) => (false, format!("getLayoutsList failed: {e}")),
+                    },
+                    Err(e) => (false, format!("proxy failed: {e}")),
+                }
+            }
+            Err(e) => (false, format!("session bus: {e}")),
+        };
+        lines.push(("org.kde.keyboard".into(), layouts_ok.0, layouts_ok.1));
+    }
 
     // Config path
-    let cfg_path = switchfix_adapters::config_store::TomlConfigStore::default_path();
+    let cfg_path = switchfix_adapters::TomlConfigStore::default_path();
     lines.push((
         "config path".into(),
         true,

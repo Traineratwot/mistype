@@ -14,14 +14,14 @@ use tracing::debug;
 use uuid::Uuid;
 
 /// Clipboard adapter (arboard). Selection capture needs an injector for Ctrl+Insert.
-pub struct WaylandClipboard {
+pub struct ArboardClipboard {
     lock: AsyncMutex<()>,
     injector: Option<Box<dyn TextInjector>>,
     settle_ms: u64,
     last_save: Mutex<Option<SavedClipboard>>,
 }
 
-impl WaylandClipboard {
+impl ArboardClipboard {
     pub fn new(injector: Option<Box<dyn TextInjector>>, settle_ms: u64) -> Self {
         Self {
             lock: AsyncMutex::new(()),
@@ -47,7 +47,7 @@ impl WaylandClipboard {
 }
 
 #[async_trait]
-impl ClipboardPort for WaylandClipboard {
+impl ClipboardPort for ArboardClipboard {
     async fn save(&self) -> Result<SavedClipboard, ClipboardError> {
         let _g = self.lock.lock().await;
         let text = Self::get_text_sync().ok();
@@ -76,7 +76,7 @@ impl ClipboardPort for WaylandClipboard {
 }
 
 #[async_trait]
-impl SelectionCapture for WaylandClipboard {
+impl SelectionCapture for ArboardClipboard {
     /// Clipboard-marker protocol:
     /// 1. save user clipboard
     /// 2. put unique marker
@@ -128,7 +128,7 @@ impl SelectionCapture for WaylandClipboard {
     }
 }
 
-impl WaylandClipboard {
+impl ArboardClipboard {
     /// Restore the snapshot saved during `capture_selection`.
     pub async fn restore_last(&self) -> Result<(), ClipboardError> {
         let saved = self.last_save.lock().unwrap().take();

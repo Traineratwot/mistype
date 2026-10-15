@@ -38,7 +38,6 @@ evdev = "0.13"
 clap = { version = "4", features = ["derive"] }
 ksni = "0.2"
 iced = { version = "0.13", features = ["tokio"] }
-wl-clipboard-rs = "0.8"
 arboard = "3"
 uuid = { version = "1", features = ["v4"] }
 
