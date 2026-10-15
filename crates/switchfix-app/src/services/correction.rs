@@ -5,15 +5,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use switchfix_domain::{
-    convert, CorrectionOutcome, CorrectionRequest, CorrectionState, KeyChord,
-    LayoutId, LayoutIndex, ConversionSet,
+    convert, ConversionSet, CorrectionOutcome, CorrectionRequest, CorrectionState, KeyChord,
+    LayoutId, LayoutIndex,
 };
 use tokio::sync::watch;
 use tracing::{debug, warn};
 
 use crate::config::AppConfig;
 use crate::ports::{
-    CapturedSelection, ClipboardPort, LayoutSwitcher, NotifyLevel, Notifier, SavedClipboard,
+    CapturedSelection, ClipboardPort, LayoutSwitcher, Notifier, NotifyLevel, SavedClipboard,
     SelectionCapture, TextInjector, TypingBufferPort,
 };
 

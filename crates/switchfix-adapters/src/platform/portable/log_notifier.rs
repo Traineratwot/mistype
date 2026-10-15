@@ -1,6 +1,6 @@
 //! Log-based notifier (desktop notifications can be added later).
 
-use switchfix_app::ports::{NotifyError, NotifyLevel, Notifier};
+use switchfix_app::ports::{Notifier, NotifyError, NotifyLevel};
 use tracing::{info, warn};
 
 /// Log-based notifier (desktop notifications can be added later).
