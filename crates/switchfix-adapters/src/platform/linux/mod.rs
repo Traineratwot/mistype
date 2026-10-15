@@ -3,6 +3,7 @@
 pub mod evdev_hotkey;
 pub mod gnome;
 pub mod kde;
+pub mod selftest;
 pub mod uinput_injector;
 
 use tracing::warn;

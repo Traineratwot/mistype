@@ -116,7 +116,10 @@ impl Platform for KdePlatform {
                     Box::new(h)
                 }
                 Err(e) => {
-                    warn!("evdev unavailable ({e}); hotkeys will only work via tray/CLI");
+                    tracing::error!(
+                        "evdev unavailable ({e}); hotkeys will NOT work from the keyboard. \
+                         Fix: log out/in so the session has group 'input', or run: sg input -c switchfix daemon"
+                    );
                     Box::new(ManualHotkeySource::new())
                 }
             }

@@ -41,6 +41,8 @@ enum Command {
     Toggle,
     /// Play the hotkey feedback sound (and print a note) — smoke-test audio.
     Beep,
+    /// Inject a synthetic hotkey (ctrl+f20) and verify evdev interception works.
+    Selftest,
 }
 
 #[tokio::main]
@@ -114,6 +116,17 @@ async fn main() -> anyhow::Result<()> {
             // Give the player a moment so the process isn't killed on exit.
             tokio::time::sleep(std::time::Duration::from_millis(400)).await;
             println!("done (if you heard nothing, install canberra-gtk-play or paplay)");
+        }
+        Command::Selftest => {
+            println!("SwitchFix hotkey self-test");
+            println!("=========================");
+            let report = switchfix_adapters::platform::linux::selftest::run_hotkey_selftest().await;
+            report.print();
+            if !report.all_ok() {
+                eprintln!("\nself-test FAILED");
+                std::process::exit(1);
+            }
+            println!("\nself-test OK — hotkey interception works");
         }
         Command::Daemon => {
             run_daemon().await?;

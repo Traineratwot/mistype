@@ -229,11 +229,17 @@ impl EvdevHotkeySource {
         let mut compiled: Vec<Binding> = Vec::new();
         for (parsed, event) in opts.bindings {
             match key_name_to_code(&parsed.key) {
-                Some(code) => compiled.push(Binding {
-                    parsed,
-                    code,
-                    event,
-                }),
+                Some(code) => {
+                    debug!(
+                        "compiled binding key='{}' code={:?} ctrl={} shift={} alt={} meta={} -> {:?}",
+                        parsed.key, code, parsed.ctrl, parsed.shift, parsed.alt, parsed.meta, event
+                    );
+                    compiled.push(Binding {
+                        parsed,
+                        code,
+                        event,
+                    })
+                }
                 None => {
                     warn!(
                         "hotkey key '{key}' has no evdev code — skipped",
@@ -275,7 +281,7 @@ impl EvdevHotkeySource {
                     if !dev.supported_keys().is_some_and(|k| k.contains(KeyCode::KEY_A)) {
                         continue;
                     }
-                    debug!("evdev keyboard: {:?} ({:?})", path, dev.name());
+                    info!("evdev device: {:?} name={:?}", path, dev.name());
                     if consume {
                         match dev.grab() {
                             Ok(()) => info!("evdev grabbed {:?} (hotkey_consume)", path),
@@ -360,15 +366,25 @@ fn run_loop(
     // When consuming, we must re-inject everything that is not a hotkey.
     let consuming = consume && passthrough.is_some();
 
+    // Non-blocking reads: a blocking fetch_events() on the first device would
+    // starve the others (keyboards would look "dead").
+    for dev in devices.iter_mut() {
+        if let Err(e) = dev.set_nonblocking(true) {
+            warn!("set_nonblocking failed: {e}");
+        }
+    }
+
     let mut ctrl = false;
     let mut alt = false;
     let mut shift = false;
     let mut meta = false;
 
     loop {
+        let mut got_any = false;
         for dev in devices.iter_mut() {
             let events = match dev.fetch_events() {
                 Ok(e) => e,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
                 Err(e) => {
                     warn!("evdev read error: {e}");
                     continue;
@@ -376,12 +392,14 @@ fn run_loop(
             };
 
             for ev in events {
+                got_any = true;
                 if ev.event_type() != EventType::KEY {
                     // In consume mode forward non-key events? Usually LED/REP — drop.
                     continue;
                 }
                 let code = ev.code();
                 let value = ev.value(); // 0=up 1=down 2=repeat
+                debug!("evdev key code={code} value={value} ctrl={ctrl} shift={shift} alt={alt} meta={meta}");
 
                 // Track modifiers (left+right).
                 if MOD_CTRL.contains(&code) {
@@ -432,6 +450,7 @@ fn run_loop(
                 });
 
                 if let Some(b) = matched {
+                    debug!("hotkey match: {:?}", b.event);
                     if value == 1 {
                         let _ = tx.try_send(b.event.clone());
                     }
@@ -457,7 +476,10 @@ fn run_loop(
             }
         }
 
-        std::thread::sleep(std::time::Duration::from_millis(3));
+        // Back off a little when idle so we don't spin the CPU.
+        if !got_any {
+            std::thread::sleep(std::time::Duration::from_millis(3));
+        }
     }
 }
 

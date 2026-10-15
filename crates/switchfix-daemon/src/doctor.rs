@@ -133,6 +133,32 @@ pub async fn run() -> DoctorReport {
         };
         lines.push(("group input".into(), input_ok, input_detail));
 
+        // Can the session actually open keyboards? (group input must be active)
+        let mut can_open_kb = 0usize;
+        if let Ok(rd) = std::fs::read_dir("/dev/input") {
+            for e in rd.flatten() {
+                let n = e.file_name();
+                let n = n.to_string_lossy();
+                if !n.starts_with("event") {
+                    continue;
+                }
+                if std::fs::OpenOptions::new().read(true).open(e.path()).is_ok() {
+                    can_open_kb += 1;
+                }
+            }
+        }
+        lines.push((
+            "open keyboards".into(),
+            can_open_kb > 0,
+            if can_open_kb > 0 {
+                format!("{can_open_kb} keyboard(s) openable")
+            } else {
+                "cannot open /dev/input/event* — session lacks group 'input' \
+                 (log out/in, or: sg input -c switchfix daemon)"
+                    .into()
+            },
+        ));
+
         // D-Bus org.kde.keyboard
         let layouts_ok = match zbus::Connection::session().await {
             Ok(conn) => {
@@ -203,6 +229,24 @@ pub async fn run() -> DoctorReport {
             "none found — hotkey will only blink the tray icon".into()
         },
     ));
+
+    // Active hotkey bindings from config (what to actually press).
+    {
+        use switchfix_app::ports::ConfigStore;
+        let store = switchfix_adapters::TomlConfigStore::open_default();
+        let cfg = store.load().unwrap_or_default();
+        lines.push((
+            "hotkeys".into(),
+            true,
+            format!(
+                "selection=[{}]  last-word=[{}]  terminal=[{}]  toggle=[{}]",
+                cfg.hotkeys.convert_selection,
+                cfg.hotkeys.convert_last_word,
+                cfg.hotkeys.convert_terminal,
+                cfg.hotkeys.toggle_enabled
+            ),
+        ));
+    }
 
     DoctorReport { lines }
 }
