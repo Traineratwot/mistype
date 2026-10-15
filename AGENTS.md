@@ -4,51 +4,324 @@ Linux tray utility that fixes text typed in the wrong keyboard layout (EN↔RU),
 switches the system layout, and (in later phases) will add spelling fixes and
 snippet expansion. Think **Punto Switcher / Keyboop** for **KDE Plasma 6 Wayland**.
 
-## Status
+Primary target: **Kubuntu (Debian + KDE Plasma 6, Wayland)**. Other OS/DE are
+stubs behind a platform layer (groundwork for the future).
 
-**MVP in progress.** Domain + app + adapters compile; unit tests green.
-UI tray/settings compile against ksni 0.2 / iced 0.13 but are not fully wired/tested yet.
+---
+
+## Status (MVP)
 
 | Layer | Crate | Status |
 |-------|-------|--------|
 | Domain (conversion, buffer, state) | `switchfix-domain` | ✅ tests green |
 | Use-cases + ports | `switchfix-app` | ✅ tests green (fakes) |
-| OS adapters (evdev/uinput/D-Bus/clipboard/config) | `switchfix-adapters` | ✅ compiles |
-| Tray + settings GUI | `switchfix-ui` | ✅ compiles, smoke not done |
-| CLI / daemon / doctor | `switchfix-daemon` | ✅ compiles |
+| Platform layer + OS adapters | `switchfix-adapters` | ✅ tests green |
+| Tray + settings GUI | `switchfix-ui` | ✅ compiles, flash/sound feedback works |
+| CLI / daemon / doctor / selftest | `switchfix-daemon` | ✅ works on live KDE |
+
+**Tests: 87 green** (+ 1 ignored live KDE D-Bus test). Verified live:
+hotkey intercept (evdev), layout switch (zbus), convert, tray flash + sound.
+
+---
 
 ## Build & test
 
 ```bash
 cargo build --release
-cargo test --workspace
-./target/release/switchfix doctor
+cargo test --workspace          # must stay green (87)
+
+./target/release/switchfix doctor     # diagnostics incl. platform + hotkey bindings
+./target/release/switchfix selftest   # injects ctrl+f20 via uinput, verifies evdev sees it
+./target/release/switchfix beep       # play hotkey feedback sound
 ./target/release/switchfix convert --text 'ghbdtn'   # → привет
+
+# live KDE D-Bus smoke (ignored by default):
+cargo test -p switchfix-adapters -- --ignored
 ```
 
-## Run (needs group `input`)
+## Run (needs group `input` **in the session**)
 
 ```bash
-sudo usermod -aG input "$USER"   # then re-login
+sudo usermod -aG input "$USER"   # then RE-LOGIN (session must pick the group up)
+
+# or without re-login for a one-off:
+sg input -c './target/release/switchfix daemon'
+
 ./target/release/switchfix daemon
 ./target/release/switchfix settings
+./target/release/switchfix setup      # interactive: usermod, udev rule (sudo only when needed)
 ```
 
-Default hotkeys: `Ctrl+F1` selection · `Ctrl+F2` last word · `Ctrl+Shift+F1` terminal · `Ctrl+Pause` toggle.
+**Hotkeys are configured in** `~/.config/switchfix/config.toml`. Defaults:
+
+| Action | Default key |
+|--------|-------------|
+| Convert selection | `ctrl+f1` |
+| Convert last word | `ctrl+f2` |
+| Convert terminal | `ctrl+shift+f1` |
+| Toggle enabled | `ctrl+pause` |
+
+The live config may differ (e.g. `insert`) — always check `switchfix doctor`.
+Click-to-capture in Settings UI; Esc cancels. After config change: **restart daemon**.
+
+Hotkey feedback: tray icon flashes amber (~350 ms) + system sound + log line
+`hotkey received: …`. Toggle via `hotkeys.hotkey_consume` (default `true`):
+EVIOCGRAB + uinput passthrough so the key never leaks to apps.
+
+---
 
 ## Architecture
 
 ```
 ui / daemon  →  app (use-cases, ports=traits)  →  domain (pure)
                         ↑ implements
-                   adapters (evdev, uinput, zbus, clipboard, toml)
+                   adapters / platform (evdev, uinput, zbus, clipboard, toml)
 ```
 
-See `docs/PLAN.md` for the full development plan (analogues, input strategies,
-test matrix, roadmap).
+### Platform layer (OOP-style: Strategy + Abstract Factory)
+
+`switchfix-adapters/src/platform/`:
+
+```
+platform/
+  mod.rs          # Platform trait, PlatformInfo, PlatformServices, PlatformError
+  detect.rs       # parse_desktop / parse_session / detect_os / detect()
+  factory.rs      # create_platform() — cfg(target_os) + runtime DE
+  stub.rs         # UnsupportedPlatform (fallback)
+  portable/       # SharedTypingBuffer, ArboardClipboard, TomlConfigStore,
+                  # ManualHotkeySource, LogNotifier
+  linux/          # #[cfg(target_os = "linux")]
+    evdev_hotkey.rs, uinput_injector.rs, selftest.rs
+    kde/          # KdePlatform (full) + layout.rs (org.kde.keyboard)
+    gnome/        # stub → Unsupported
+  windows/, macos/  # stubs (cfg-gated)
+```
+
+- **One `Platform` per OS/DE**; `build_services()` returns all 8 ports.
+- Selection: compile-time OS, runtime `XDG_CURRENT_DESKTOP` (KDE / GNOME / other).
+- Only **linux/kde** is fully implemented. Stubs return `PlatformError::Unsupported`.
+- Do **not** re-export `evdev::KeyCode` outside `platform/linux`.
+
+### Ports (unified interface) — `switchfix-app/src/ports.rs`
+
+`TextInjector`, `ClipboardPort`, `SelectionCapture`, `TypingBufferPort`,
+`LayoutSwitcher`, `HotkeySource`, `ConfigStore`, `Notifier`.
+
+Composition root: `switchfix-daemon/src/wiring.rs`
+(`create_platform` → `build_services` → `CorrectionService`).
+
+`CorrectionService::new` arg order:
+`injector, clipboard, selection, buffer, layouts, notifier, tables, config_rx, enabled`.
+Clipboard + selection must be **two Arc views of one** `ArboardClipboard`.
+
+See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
+
+---
+
+## Development rules
+
+1. **Ports stay abstract.** New OS/DE support = new `Platform` impl, not changes
+   to domain/app/CorrectionService. The 8 traits are the contract.
+2. **Domain is pure** — no I/O, no evdev/zbus, no `std::process`. Adapters own OS.
+3. **Dependencies flow downward only:** `ui/daemon → app → domain`. UI must not
+   depend on adapters (take `Box<dyn ConfigStore>` etc.).
+4. **cfg-gate OS deps.** `evdev`, `zbus`, `futures-lite` live under
+   `[target.'cfg(target_os = "linux")'.dependencies]`. Portable code must not
+   import them.
+5. **Tests must stay green.** `cargo test --workspace` after every change.
+   Fakes in `switchfix-tests/tests/fakes/` implement ports — keep them compiling.
+6. **No network, no keylog persistence.** Typing buffer is RAM-only and optional
+   (`privacy.typing_buffer`). Never log typed text or clipboard contents.
+7. **Do not auto-enable systemd user service on install** (PLAN §8).
+8. **User-facing error texts stay actionable** (e.g. `Run: sudo usermod -aG input $USER`,
+   `Are you on KDE Plasma?`). Don't flatten to generic strings.
+9. **UI strings are Russian**, code/identifiers English.
+10. **Don't rename port error variants** (`InjectError::Device`, …) without a
+    functional reason — it churns fakes for zero gain.
+11. **EVIOCGRAB safety:** always open the passthrough uinput **before** grabbing.
+    If passthrough fails, never grab (or the keyboard becomes unusable).
+12. **Prefer boring, compile-safe Rust.** No speculative abstractions. Three
+    similar lines beat a premature helper.
+13. **Comments only for non-obvious WHY** (hidden constraints, kernel quirks).
+
+### Adding a new platform (checklist)
+
+1. `platform/<os>/mod.rs` or `platform/linux/<de>/mod.rs` implementing `Platform`.
+2. `detect.rs`: teach `parse_desktop` / `OsKind` if needed.
+3. `factory.rs`: wire `create_platform_from`.
+4. Stub must return `PlatformError::Unsupported` with a helpful reason until real.
+5. Target-specific Cargo deps if the OS needs them.
+6. Tests for detect/factory selection (pure functions).
+7. Never leak OS types (`evdev::KeyCode`, `HWND`, …) through `PlatformServices`.
+
+### Adding a port / capability
+
+1. Define trait + errors in `switchfix-app/src/ports.rs`.
+2. Implement in `platform/portable` (shared) or per-OS module.
+3. Add field to `PlatformServices` and fill in every `Platform::build_services`
+   (stubs don't need to — they error).
+4. Fake in `switchfix-tests/tests/fakes/`.
+5. Wire into `CorrectionService` / daemon only through the trait.
+
+---
+
+## Landmines (грабли) — read before touching input/platform
+
+| Pitfall | What happens | Fix / rule |
+|---------|--------------|------------|
+| **Blocking `fetch_events()`** | First keyboard starves the others; hotkeys look “dead” | Must `set_nonblocking(true)` on all devices and skip `WouldBlock`. See `evdev_hotkey.rs::run_loop`. |
+| **Session vs passwd groups** | `usermod -aG input` is invisible until re-login. `id -nG` ≠ `id -nG "$USER"` | Doctor checks both. Run daemon with `sg input -c …` until re-login. |
+| **`/dev/input/event*` needs group `input`** | evdev open fails → silent fallback to `ManualHotkeySource` | Error is loud (`tracing::error!`). `selftest` / doctor `open keyboards` catch this. |
+| **`/dev/uinput` often writable via ACL** even without `input` | uinput works, evdev doesn't | Don't use uinput success as proof that hotkeys will work. |
+| **Plasma 6 D-Bus is camelCase** | zbus `#[proxy]` PascalCases snake_case names (`GetLayout` vs `getLayout`) | Always `#[zbus(name = "getLayout")]` etc. in `kde/layout.rs`. |
+| **`WGPU_BACKEND=gl`** | Hybrid NVIDIA + Wayland: iced/wgpu panics | `run_settings` forces `WGPU_BACKEND=gl` if unset. Keep this. |
+| **iced `on_key_press` only fires for `Status::Ignored`** | Hotkey capture UI swallows keys if focused widget handles them | Capture targets use `mouse_area`, not `button`/`text_input`. |
+| **EVIOCGRAB without passthrough** | Keyboard becomes unusable system-wide | Open passthrough first; abort grab on failure. |
+| **Clipboard: one instance, two trait views** | Two clipboards break marker-protocol `last_save` | `let c = Arc::new(ArboardClipboard…); clipboard: c.clone(), selection: c`. |
+| **Second uinput for clipboard chords** | Selection capture injects Ctrl+Insert | Keep a separate `UinputInjector` (current behavior). Don't “optimize” to one without retesting M-matrix. |
+| **`HotkeySource::events()` is `take()`** | Second call returns an empty channel | Call once in the daemon loop. Never during `build_services`. |
+| **`key_name_to_code` returns `evdev::KeyCode`** | Linux type leak | Keep it private to `platform/linux`. |
+| **SharedTypingBuffer ≠ domain `TypingBuffer`** | Duplicate concepts | Live one is adapters `SharedTypingBuffer`. Do not merge casually; `EvdevOptions.buffer` needs concrete type (`push`/`pop`). |
+| **wl-clipboard-rs** | Was a dead dep (arboard is used) | Removed. Don't reintroduce without a real Wayland path. |
+| **`WaylandClipboard` was misnamed** | Actually arboard | Renamed `ArboardClipboard`. |
+| **udev rule + group** | Needed for `/dev/uinput` on some systems | `switchfix setup` installs `99-switchfix-uinput.rules`. |
+| **KDE layout set is async** | `setLayout` may not stick immediately | Poll `getLayout` briefly (see `layout.rs`). |
+| **Mixed text `hello мир` → majority direction** | Unmapped chars unchanged | Expected domain behavior, not a bug. |
+| **selftest keyboard `No such device` warnings** | Temporary uinput disappears after test | Harmless. |
+
+---
+
+## CLI surface (`switchfix`)
+
+| Command | Purpose |
+|---------|---------|
+| `daemon` (default) | Tray + hotkeys + corrections |
+| `settings` | iced settings window (separate process) |
+| `convert [--text]` | Pure domain convert (no injection) |
+| `doctor` | Diagnostics: platform, groups, uinput, D-Bus, **hotkey bindings**, sound |
+| `setup [-y]` | Interactive privileged setup (sudo only for root steps) |
+| `toggle` | Flip enabled/paused via temp state file |
+| `beep` | Play hotkey feedback sound |
+| `selftest` | Inject `ctrl+f20` via uinput, assert evdev intercepts it |
+
+---
+
+## Config (`~/.config/switchfix/config.toml`)
+
+`AppConfig` in `switchfix-app/src/config.rs` (`Default` + `validate()`):
+
+- `general.enabled_on_start`, `language`
+- `hotkeys.convert_selection / convert_last_word / convert_terminal / toggle_enabled`
+  — grammar `ctrl+shift+f1`, `insert`, `home`, … (`HotkeyBinding::parse`)
+- `hotkeys.hotkey_consume` (default **true**) — EVIOCGRAB + passthrough
+- `hotkeys.use_portal_hotkeys` — **flag only, not implemented**
+- `behavior.copy_settle_ms` — selection-capture settle delay
+- `privacy.typing_buffer`, `privacy.typing_buffer_max_keys`
+- `layouts.active` — KDE short ids `["us","ru"]`
+
+Settings UI: click field → press combo → saved; tooltip labels in Russian.
+
+---
+
+## Testing strategy
+
+| Kind | Where | Notes |
+|------|-------|-------|
+| Domain unit | `switchfix-domain` | conversion, buffer, maps |
+| App unit | `switchfix-app` | hotkey parse, config validate, correction (inline fakes) |
+| Adapter unit | `switchfix-adapters` | config_store tempfile, detect/factory, parse_hotkey_bindings |
+| Integration order | `switchfix-tests/tests/scenarios.rs` | 11 order-sensitive scenarios + shared event-log fakes |
+| UI unit | `switchfix-ui` | combo formatting |
+| Live (ignored) | `kde/layout.rs` | `live_kde_layout_roundtrip` |
+| Live CLI | `switchfix selftest` | uinput inject → evdev match |
+
+**Manual matrix:** `docs/MANUAL-TEST-MATRIX.md` (M1–M14) on Kate / Firefox /
+Konsole / Telegram / VS Code. Include hotkey consume leak-check.
+
+**Simulating keys (for intercept tests):**
+```bash
+ydotool key 110:1 110:0          # Insert down/up (if insert is bound)
+ydotool key --key-delay=60 29:1 59:1 59:0 29:0   # Ctrl+F1
+# KEY_* codes: /usr/include/linux/input-event-codes.h
+```
+Watch `RUST_LOG=debug` for `evdev key …` / `hotkey match` / `hotkey received`.
+
+---
+
+## Packaging
+
+- `packaging/systemd/switchfix.service` — user unit (do **not** enable on install)
+- `packaging/systemd/99-switchfix-uinput.rules` — uinput group/mode
+- `packaging/desktop/switchfix.desktop` — KDE autostart bits
+- `packaging/install.sh`, `packaging/build-deb.sh` → `target/switchfix_0.1.0_amd64.deb`
+- `assets/maps/en2ru.json`, `ru2en.json`, `assets/icons/switchfix.svg`
+
+Docs: `docs/PLAN.md`, `PRIVACY.md`, `SECURITY.md`, `MANUAL-TEST-MATRIX.md`.
+
+---
+
+## FAQ
+
+**Q: Hotkeys do nothing / no log / no flash.**  
+A: (1) `switchfix doctor` → `open keyboards` must be OK. If FAIL, session lacks
+group `input` — re-login or `sg input -c switchfix daemon`. (2) Keys must match
+`doctor` → `hotkeys` (config), not the docs default. (3) `switchfix selftest` to
+prove the intercept path. (4) `RUST_LOG=debug` daemon → look for `hotkey received`.
+
+**Q: Doctor says “log out and back in for this session”.**  
+A: `usermod` updated the passwd DB only. The current session token doesn't have
+`input`. Re-login, or start with `sg input -c …`.
+
+**Q: Keyboard died / no input after starting daemon.**  
+A: `hotkey_consume` grabbed devices. Passthrough should re-inject non-hotkeys.
+If passthrough uinput failed, grab is skipped (by design). Kill daemon to restore.
+Run `switchfix setup` if `/dev/uinput` is not writable.
+
+**Q: Settings window crashes / black window on NVIDIA.**  
+A: Hybrid GPU + Wayland wgpu panic. We force `WGPU_BACKEND=gl`. Don't remove.
+
+**Q: I changed a hotkey in Settings but it still uses the old one.**  
+A: MVP reads bindings at daemon start. **Restart the daemon.**
+
+**Q: Why `ctrl+f1` doesn't trigger but `insert` does?**  
+A: Your `config.toml` has `convert_selection = "insert"`. `doctor` prints the
+live bindings. Defaults ≠ current config.
+
+**Q: How do I know the program received my keypress?**  
+A: Tray icon flashes amber, sound plays, log shows `hotkey received: …`.
+If the correction itself fails (e.g. empty selection), you still get the flash —
+that proves intercept works.
+
+**Q: `selftest` FAIL on `hotkey intercept`.**  
+A: Without group `input`, it fails at `open event*` first. With the group:
+timeout means the injected device wasn't tracked — we create uinput, sleep 200 ms,
+then open evdev (hotplug race). If still failing, check `RUST_LOG=debug` for
+`evdev device:` lines including `switchfix-selftest-kb`.
+
+**Q: How to add GNOME support?**  
+A: Implement `Platform` in `platform/linux/gnome/` (gsettings / XDG portal).
+Wire `linux::select`. Don't touch domain/app. Keep KDE path green.
+
+**Q: How to add Windows/macOS?**  
+A: `platform/windows` / `platform/macos` stubs exist. Real work needs
+SendInput/ImmGetLayout (Win) or CGEvent/TIS (macOS) + a layout switcher + tray.
+Cross-check with `cargo check --target …`. UI (ksni/iced) is still Linux-oriented.
+
+**Q: Can I use portal hotkeys (`use_portal_hotkeys`)?**  
+A: Not implemented. Flag is reserved. evdev is the only HotkeySource.
+
+**Q: What's the difference between `SharedTypingBuffer` and domain `TypingBuffer`?**  
+A: Adapters `SharedTypingBuffer` is what runs (implements `TypingBufferPort`,
+used by evdev). Domain buffer is a pure helper. Unifying them is a later cleanup.
+
+**Q: Where should a new feature go?**  
+A: Pure logic → domain. Orchestration → app service + ports. OS calls →
+`platform/{portable,linux,windows,macos}`. UI → `switchfix-ui` via ports only.
+
+---
 
 ## Privacy
 
 No network, no keylogging persistence. Keystroke buffer is RAM-only and optional.
-Membership in group `input` is required for global hotkeys / uinput — documented
-risk, see `docs/PLAN.md` §9.
+Group `input` is required for global hotkeys / uinput — documented risk,
+see `docs/PLAN.md` §9, `docs/PRIVACY.md`, `docs/SECURITY.md`.
