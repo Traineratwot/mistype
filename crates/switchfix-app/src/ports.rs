@@ -155,3 +155,20 @@ pub trait ConfigStore: Send + Sync {
 pub trait Notifier: Send + Sync {
     async fn notify(&self, msg: &str, level: NotifyLevel) -> Result<(), NotifyError>;
 }
+
+/// Snapshot of the focused window, used to pick correction strategy
+/// (terminal vs GUI) and to skip work in games / excluded apps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveWindow {
+    /// Process / app id (`konsole`, `firefox`, `steam`, …). Lowercase.
+    pub app_id: String,
+    pub title: String,
+    pub fullscreen: bool,
+}
+
+#[async_trait]
+pub trait FocusMonitor: Send + Sync {
+    /// Best-effort; `None` when the compositor cannot tell us (then we
+    /// fall back to the generic GUI strategy and never block).
+    async fn active_window(&self) -> Option<ActiveWindow>;
+}

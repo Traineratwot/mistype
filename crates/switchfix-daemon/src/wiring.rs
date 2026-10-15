@@ -70,15 +70,17 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
         hotkeys,
         config,
         notifier,
+        focus,
     } = services;
 
-    let service = Arc::new(CorrectionService::new(
+    let service = Arc::new(CorrectionService::with_focus(
         injector,
         clipboard,
         selection,
         buffer.clone() as Arc<dyn TypingBufferPort>,
         layouts,
         notifier,
+        focus,
         ConversionSet::en_ru(),
         config_rx.clone(),
         cfg.general.enabled_on_start,

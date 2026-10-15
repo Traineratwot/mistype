@@ -13,8 +13,8 @@ use tracing::{debug, warn};
 
 use crate::config::AppConfig;
 use crate::ports::{
-    CapturedSelection, ClipboardPort, LayoutSwitcher, Notifier, NotifyLevel, SavedClipboard,
-    SelectionCapture, TextInjector, TypingBufferPort,
+    CapturedSelection, ClipboardPort, FocusMonitor, LayoutSwitcher, Notifier, NotifyLevel,
+    SavedClipboard, SelectionCapture, TextInjector, TypingBufferPort,
 };
 
 /// Orchestrates capture → convert → replace → switch-layout.
@@ -25,6 +25,7 @@ pub struct CorrectionService {
     buffer: Arc<dyn TypingBufferPort>,
     layouts: Arc<dyn LayoutSwitcher>,
     notifier: Arc<dyn Notifier>,
+    focus: Option<Arc<dyn FocusMonitor>>,
     tables: ConversionSet,
     config: watch::Receiver<AppConfig>,
     enabled: AtomicBool,
@@ -32,7 +33,6 @@ pub struct CorrectionService {
 }
 
 impl CorrectionService {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         injector: Arc<dyn TextInjector>,
         clipboard: Arc<dyn ClipboardPort>,
@@ -40,6 +40,33 @@ impl CorrectionService {
         buffer: Arc<dyn TypingBufferPort>,
         layouts: Arc<dyn LayoutSwitcher>,
         notifier: Arc<dyn Notifier>,
+        tables: ConversionSet,
+        config: watch::Receiver<AppConfig>,
+        enabled: bool,
+    ) -> Self {
+        Self::with_focus(
+            injector,
+            clipboard,
+            selection,
+            buffer,
+            layouts,
+            notifier,
+            None,
+            tables,
+            config,
+            enabled,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_focus(
+        injector: Arc<dyn TextInjector>,
+        clipboard: Arc<dyn ClipboardPort>,
+        selection: Arc<dyn SelectionCapture>,
+        buffer: Arc<dyn TypingBufferPort>,
+        layouts: Arc<dyn LayoutSwitcher>,
+        notifier: Arc<dyn Notifier>,
+        focus: Option<Arc<dyn FocusMonitor>>,
         tables: ConversionSet,
         config: watch::Receiver<AppConfig>,
         enabled: bool,
@@ -52,6 +79,7 @@ impl CorrectionService {
             buffer,
             layouts,
             notifier,
+            focus,
             tables,
             config,
             enabled: AtomicBool::new(enabled),
@@ -98,6 +126,52 @@ impl CorrectionService {
             return CorrectionOutcome::Disabled;
         }
 
+        let cfg = self.cfg();
+        let win = match &self.focus {
+            Some(f) => f.active_window().await,
+            None => None,
+        };
+
+        if let Some(w) = &win {
+            let app = w.app_id.to_ascii_lowercase();
+            if cfg
+                .behavior
+                .excluded_apps
+                .iter()
+                .any(|e| app == e.to_ascii_lowercase() || app.contains(&e.to_ascii_lowercase()))
+            {
+                debug!("skip: excluded app '{app}'");
+                return CorrectionOutcome::Disabled;
+            }
+            if w.fullscreen && cfg.behavior.disable_in_fullscreen {
+                debug!("skip: fullscreen window '{app}'");
+                return CorrectionOutcome::Disabled;
+            }
+        }
+
+        // Auto-pick terminal strategy when the focused app is a terminal —
+        // no separate hotkey needed.
+        let req = match (&req, &win) {
+            (
+                CorrectionRequest::ConvertSelection | CorrectionRequest::ConvertLastWord,
+                Some(w),
+            ) => {
+                let app = w.app_id.to_ascii_lowercase();
+                if cfg
+                    .behavior
+                    .terminal_apps
+                    .iter()
+                    .any(|t| app == t.to_ascii_lowercase() || app.contains(&t.to_ascii_lowercase()))
+                {
+                    debug!("auto terminal strategy for '{app}'");
+                    CorrectionRequest::ConvertTerminal
+                } else {
+                    req
+                }
+            }
+            _ => req,
+        };
+
         let _ = self.state_tx.send(CorrectionState::Capturing);
 
         let outcome = match req {
@@ -126,14 +200,14 @@ impl CorrectionService {
     }
 
     async fn convert_selection(&self) -> CorrectionOutcome {
-        let cfg = self.cfg();
-
         let captured = match self.selection.capture_selection().await {
             Ok(Some(sel)) => sel,
             Ok(None) => {
-                if cfg.behavior.fallback_to_word_on_no_selection {
-                    return self.convert_last_word().await;
-                }
+                // Marker survived = copy produced nothing. A last-word fallback
+                // uses Backspace, which DELETES an active selection (one
+                // Backspace wipes the whole selection) — that is exactly the
+                // "selection vanished, nothing inserted" bug. Never fall back
+                // from the selection hotkey; use ConvertLastWord for that.
                 return CorrectionOutcome::NoInputFound;
             }
             Err(e) => {
@@ -160,16 +234,28 @@ impl CorrectionService {
 
         let _ = self.state_tx.send(CorrectionState::Replacing);
 
+        // Switch layout BEFORE typing so physical keys match the target layout.
+        self.switch_layout_for(&converted.converted).await;
+        tokio::time::sleep(Duration::from_millis(40)).await;
+
         if let Err(e) = self.injector.backspace(span.char_len).await {
             return CorrectionOutcome::Failed(format!("backspace: {e}"));
         }
 
-        let target_layout = LayoutId::new(converted.to.as_str().to_string());
-        if let Err(e) = self.injector.type_text(&converted.converted, &target_layout).await {
-            return CorrectionOutcome::Failed(format!("type_text: {e}"));
+        // Prefer clipboard paste: type_text's keymap is incomplete for some
+        // chars and fails *after* backspace (word vanishes). Paste is reliable.
+        let paste_path = self.replace_word_via_paste(&converted.converted).await;
+        if let Err(e) = paste_path {
+            let target_layout = LayoutId::new(converted.to.as_str().to_string());
+            if let Err(e2) = self
+                .injector
+                .type_text(&converted.converted, &target_layout)
+                .await
+            {
+                return CorrectionOutcome::Failed(format!("paste: {e}; type_text: {e2}"));
+            }
         }
 
-        self.switch_layout_for(&converted.converted).await;
         self.buffer.clear();
 
         CorrectionOutcome::Converted {
@@ -256,9 +342,33 @@ impl CorrectionService {
             return CorrectionOutcome::Failed(format!("clipboard put: {e}"));
         }
 
-        if let Err(e) = self.injector.chord(KeyChord::CtrlV).await {
-            self.restore_clipboard(saved, &cfg).await;
-            return CorrectionOutcome::Failed(format!("paste: {e}"));
+        // Wayland/X11: if the offer did not stick, Ctrl+V pastes EMPTY and
+        // wipes the selection. Verify before pasting; fall back to typing
+        // (first keystroke replaces the selection).
+        let paste_ok = match self.clipboard.get_text().await {
+            Ok(t) => t == converted.converted,
+            Err(e) => {
+                debug!("clipboard verify: {e}");
+                false
+            }
+        };
+
+        if paste_ok {
+            if let Err(e) = self.injector.chord(KeyChord::CtrlV).await {
+                self.restore_clipboard(saved, &cfg).await;
+                return CorrectionOutcome::Failed(format!("paste: {e}"));
+            }
+        } else {
+            debug!("clipboard offer missing — typing over selection instead of empty paste");
+            let target_layout = LayoutId::new(converted.to.as_str().to_string());
+            if let Err(e) = self
+                .injector
+                .type_text(&converted.converted, &target_layout)
+                .await
+            {
+                self.restore_clipboard(saved, &cfg).await;
+                return CorrectionOutcome::Failed(format!("type_text: {e}"));
+            }
         }
 
         // Give the app time to consume paste before restore.
@@ -275,6 +385,27 @@ impl CorrectionService {
             converted: converted.converted,
             layout_switched_to: None,
         }
+    }
+
+    /// Paste `text` via clipboard (Ctrl+V) after the word was erased.
+    async fn replace_word_via_paste(&self, text: &str) -> Result<(), String> {
+        let cfg = self.cfg();
+        let saved = self.clipboard.save().await.ok();
+        self.clipboard
+            .put_text(text)
+            .await
+            .map_err(|e| format!("clipboard put: {e}"))?;
+        self.injector
+            .chord(KeyChord::CtrlV)
+            .await
+            .map_err(|e| format!("paste: {e}"))?;
+        tokio::time::sleep(Duration::from_millis(cfg.behavior.paste_settle_ms)).await;
+        if let Some(s) = saved {
+            if cfg.behavior.restore_clipboard {
+                let _ = self.clipboard.restore(s).await;
+            }
+        }
+        Ok(())
     }
 
     /// Best-effort clipboard restore (never fails the conversion).
@@ -552,7 +683,8 @@ mod tests {
         }
         let log = inj.log.lock().unwrap().clone();
         assert!(log.iter().any(|l| l == "bs:6"), "log={log:?}");
-        assert!(log.iter().any(|l| l == "type:привет:ru"), "log={log:?}");
+        // Word replace prefers clipboard paste over type_text.
+        assert!(log.iter().any(|l| l.contains("chord:CtrlV")), "log={log:?}");
         assert!(buf.word.lock().unwrap().is_none());
     }
 
@@ -597,12 +729,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn selection_falls_back_to_word() {
+    async fn selection_no_capture_does_not_eat_selection() {
         let (svc, inj, _c, _b) = service(None, Some("руддщ".into()), false, true);
         let out = svc.handle(CorrectionRequest::ConvertSelection).await;
-        assert!(out.is_success(), "{out:?}");
+        assert_eq!(out, CorrectionOutcome::NoInputFound);
         let log = inj.log.lock().unwrap().clone();
-        assert!(log.iter().any(|l| l == "bs:5"), "log={log:?}");
+        assert!(
+            !log.iter().any(|l| l.starts_with("bs:")),
+            "must not backspace over a possible selection: {log:?}"
+        );
     }
 
     #[tokio::test]

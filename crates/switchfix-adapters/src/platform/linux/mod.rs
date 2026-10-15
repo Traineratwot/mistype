@@ -43,6 +43,9 @@ pub(crate) fn parse_hotkey_bindings(
     ];
     let mut out = Vec::new();
     for (s, ev) in pairs {
+        if s.trim().is_empty() {
+            continue; // disabled via Esc reset in settings
+        }
         match HotkeyBinding::parse(&s) {
             Some(b) => out.push((b, ev)),
             None => warn!("invalid hotkey in config: {s:?}"),

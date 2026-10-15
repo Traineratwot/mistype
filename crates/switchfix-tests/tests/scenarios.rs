@@ -47,9 +47,10 @@ async fn convert_selection_happy_order() {
     );
 }
 
-/// No selection → fallback to last word; clipboard untouched by the word path.
+/// No selection → do NOT fall back to last-word Backspace (it would delete an
+/// active selection that simply failed to copy).
 #[tokio::test]
-async fn no_selection_falls_back_to_word() {
+async fn no_selection_does_not_backspace() {
     let h = harness(HarnessOptions {
         selected: None,
         word: Some("ghbdtn".into()),
@@ -57,11 +58,12 @@ async fn no_selection_falls_back_to_word() {
     });
 
     let out = h.service.handle(CorrectionRequest::ConvertSelection).await;
-    assert!(out.is_success(), "{out:?}");
-    // Word path: backspace + type, no put/restore.
-    h.injector.log.assert_order("backspace:6", "type:привет@ru");
+    assert_eq!(out, CorrectionOutcome::NoInputFound);
+    assert!(
+        !h.injector.log.contains("backspace:"),
+        "must not eat a possible selection"
+    );
     assert!(!h.clipboard.log.contains("put:"), "clipboard must stay clean");
-    assert!(!h.clipboard.log.contains("restore"), "no restore needed");
 }
 
 /// No selection and no word → NoInputFound, clipboard untouched.
@@ -73,7 +75,7 @@ async fn no_selection_no_word_is_no_input() {
     assert!(!h.clipboard.log.contains("put:"));
 }
 
-/// Convert last word: backspace×N → type_text → set(layout); clipboard not touched.
+/// Convert last word: backspace×N → paste (Ctrl+V) → restore → set(layout).
 #[tokio::test]
 async fn convert_last_word_order() {
     let h = harness(HarnessOptions {
@@ -85,10 +87,9 @@ async fn convert_last_word_order() {
     let out = h.service.handle(CorrectionRequest::ConvertLastWord).await;
     assert!(out.is_success(), "{out:?}");
     h.events.assert_order("take_last_word", "backspace:5");
-    h.events.assert_order("backspace:5", "type:hello@us");
-    h.events.assert_order("type:hello@us", "set_layout:0");
-    assert!(!h.clipboard.log.contains("save"), "clipboard must not be touched");
-    assert!(!h.clipboard.log.contains("put:"), "clipboard must not be touched");
+    h.events.assert_order("backspace:5", "put:hello");
+    h.events.assert_order("put:hello", "chord:CtrlV");
+    // Clipboard is restored after paste.
     assert_eq!(
         h.clipboard.text.lock().unwrap().as_deref(),
         Some("keep-me")
@@ -122,8 +123,12 @@ async fn layout_fail_keeps_text() {
 
     let out = h.service.handle(CorrectionRequest::ConvertLastWord).await;
     assert!(out.is_success(), "conversion must succeed even if layout fails: {out:?}");
-    // Text was retyped despite layout failure.
-    assert!(h.injector.log.contains("type:привет@ru"));
+    // Word is pasted (or typed) despite layout failure.
+    assert!(
+        h.injector.log.contains("chord:CtrlV") || h.injector.log.contains("type:привет@ru"),
+        "log={:?}",
+        h.injector.log.all()
+    );
     // Warning was sent.
     assert!(
         h.notifier.log.contains("раскладка"),

@@ -20,8 +20,8 @@ use std::sync::Arc;
 
 use switchfix_app::config::AppConfig;
 use switchfix_app::ports::{
-    ClipboardPort, ConfigStore, HotkeySource, LayoutSwitcher, Notifier, SelectionCapture,
-    TextInjector, TypingBufferPort,
+    ClipboardPort, ConfigStore, FocusMonitor, HotkeySource, LayoutSwitcher, Notifier,
+    SelectionCapture, TextInjector, TypingBufferPort,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +86,8 @@ pub struct PlatformServices {
     pub hotkeys: Box<dyn HotkeySource>,
     pub config: Arc<dyn ConfigStore>,
     pub notifier: Arc<dyn Notifier>,
+    /// Optional: focused-window monitor (KDE). `None` = no focus filtering.
+    pub focus: Option<Arc<dyn FocusMonitor>>,
 }
 
 #[derive(Debug, thiserror::Error)]

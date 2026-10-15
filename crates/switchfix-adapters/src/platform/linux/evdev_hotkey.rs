@@ -94,6 +94,11 @@ pub fn key_name_to_code(name: &str) -> Option<KeyCode> {
         "down" => KeyCode::KEY_DOWN,
         "left" => KeyCode::KEY_LEFT,
         "right" => KeyCode::KEY_RIGHT,
+        "capslock" | "caps" => KeyCode::KEY_CAPSLOCK,
+        "numlock" => KeyCode::KEY_NUMLOCK,
+        "scrolllock" => KeyCode::KEY_SCROLLLOCK,
+        "menu" => KeyCode::KEY_MENU,
+        "printscreen" | "print" | "sysrq" => KeyCode::KEY_SYSRQ,
         "minus" => KeyCode::KEY_MINUS,
         "equal" => KeyCode::KEY_EQUAL,
         "leftbrace" => KeyCode::KEY_LEFTBRACE,
@@ -279,6 +284,14 @@ impl EvdevHotkeySource {
             match Device::open(&path) {
                 Ok(mut dev) => {
                     if !dev.supported_keys().is_some_and(|k| k.contains(KeyCode::KEY_A)) {
+                        continue;
+                    }
+                    // Never listen to / grab our own uinput devices — otherwise
+                    // injected chords (Ctrl+C, Ctrl+V) are eaten by this loop
+                    // and never reach the focused app.
+                    let dev_name = dev.name().map(|s| s.to_string()).unwrap_or_default();
+                    if dev_name.starts_with("switchfix") {
+                        debug!("skip own uinput device {:?} name={:?}", path, dev_name);
                         continue;
                     }
                     info!("evdev device: {:?} name={:?}", path, dev.name());

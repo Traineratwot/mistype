@@ -211,6 +211,12 @@ impl TextInjector for UinputInjector {
 
     async fn chord(&self, combo: KeyChord) -> Result<(), InjectError> {
         let keys: &[KeyCode] = match combo {
+            KeyChord::CtrlC => &[KeyCode::KEY_LEFTCTRL, KeyCode::KEY_C],
+            KeyChord::CtrlShiftC => &[
+                KeyCode::KEY_LEFTCTRL,
+                KeyCode::KEY_LEFTSHIFT,
+                KeyCode::KEY_C,
+            ],
             KeyChord::CtrlInsert => &[KeyCode::KEY_LEFTCTRL, KeyCode::KEY_INSERT],
             KeyChord::CtrlV => &[KeyCode::KEY_LEFTCTRL, KeyCode::KEY_V],
             KeyChord::CtrlShiftV => &[

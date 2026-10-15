@@ -179,10 +179,18 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 | **EVIOCGRAB without passthrough** | Keyboard becomes unusable system-wide | Open passthrough first; abort grab on failure. |
 | **Clipboard: one instance, two trait views** | Two clipboards break marker-protocol `last_save` | `let c = Arc::new(ArboardClipboard…); clipboard: c.clone(), selection: c`. |
 | **Second uinput for clipboard chords** | Selection capture injects Ctrl+Insert | Keep a separate `UinputInjector` (current behavior). Don't “optimize” to one without retesting M-matrix. |
+| **arboard `set_text` drops the offer** | Wayland/X11 clipboard is hosted by the owner process; dropping `Clipboard` (or `wl-clipboard-rs` fork from a MT daemon) makes Ctrl+V paste **empty** and **deletes the selection** | Prefer `wl-copy` (daemonizes a child). Keep an arboard owner thread. Always `get_text()`-verify before Ctrl+V; if missing, `type_text` over the selection. |
+| **Never grab our own uinput** | Injected Ctrl+C/Ctrl+V are eaten by the evdev loop | Skip devices named `switchfix*` in `evdev_hotkey.rs`. |
+| **Copy chord order** | Ctrl+C is SIGINT in Konsole | Capture tries Ctrl+Insert → Ctrl+Shift+C → Ctrl+C. Never lead with Ctrl+C. |
+| **Last-word fallback on empty capture** | `backspace(n)` with an active selection wipes it | `ConvertSelection` with `Ok(None)` returns `NoInputFound`. Use `ConvertLastWord` for the word path. |
+| **`type_text` keymap is incomplete** | After `backspace`, a failed `type_text` leaves nothing | Word replace prefers clipboard paste (`replace_word_via_paste`); `type_text` is fallback only. |
+| **Focus monitor is best-effort** | KWin `getWindowInfo` often returns `{}`; `queryWindowInfo` is interactive | `FocusMonitor` = xprop then KWin; `None` → generic GUI path, never block. |
+| **`switchfix.capture-pause`** | Settings capture must not trigger real hotkeys | Daemon drains the hotkey queue while the file exists. Remove on capture end/exit. |
+| **Empty hotkey = disabled** | Esc in Settings clears the binding | `validate()` accepts `""`; `parse_hotkey_bindings` skips empty. |
 | **`HotkeySource::events()` is `take()`** | Second call returns an empty channel | Call once in the daemon loop. Never during `build_services`. |
 | **`key_name_to_code` returns `evdev::KeyCode`** | Linux type leak | Keep it private to `platform/linux`. |
 | **SharedTypingBuffer ≠ domain `TypingBuffer`** | Duplicate concepts | Live one is adapters `SharedTypingBuffer`. Do not merge casually; `EvdevOptions.buffer` needs concrete type (`push`/`pop`). |
-| **wl-clipboard-rs** | Was a dead dep (arboard is used) | Removed. Don't reintroduce without a real Wayland path. |
+| **wl-clipboard-rs** | Was a dead dep (arboard is used) | Removed. `wl-copy`/`wl-paste` are invoked as CLI when present; arboard is the library fallback. |
 | **`WaylandClipboard` was misnamed** | Actually arboard | Renamed `ArboardClipboard`. |
 | **udev rule + group** | Needed for `/dev/uinput` on some systems | `switchfix setup` installs `99-switchfix-uinput.rules`. |
 | **KDE layout set is async** | `setLayout` may not stick immediately | Poll `getLayout` briefly (see `layout.rs`). |
@@ -212,14 +220,20 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 
 - `general.enabled_on_start`, `language`
 - `hotkeys.convert_selection / convert_last_word / convert_terminal / toggle_enabled`
-  — grammar `ctrl+shift+f1`, `insert`, `home`, … (`HotkeyBinding::parse`)
+  — grammar `ctrl+shift+f1`, `insert`, `capslock`, `home`, … (`HotkeyBinding::parse`)
+  — **empty string = action disabled** (Esc in Settings resets the field)
 - `hotkeys.hotkey_consume` (default **true**) — EVIOCGRAB + passthrough
 - `hotkeys.use_portal_hotkeys` — **flag only, not implemented**
-- `behavior.copy_settle_ms` — selection-capture settle delay
+- `behavior.copy_settle_ms`, `behavior.paste_settle_ms`
+- `behavior.terminal_apps` — app ids that use terminal paste (auto, no separate hotkey)
+- `behavior.excluded_apps` — never correct here (keepassxc, …)
+- `behavior.disable_in_fullscreen` (default **true**) — skip games / fullscreen video
 - `privacy.typing_buffer`, `privacy.typing_buffer_max_keys`
 - `layouts.active` — KDE short ids `["us","ru"]`
 
-Settings UI: click field → press combo → saved; tooltip labels in Russian.
+Settings UI: click field → press combo → saved; Esc **clears** the binding;
+checkboxes Ctrl/Alt/Shift/Meta force modifiers; while capturing a
+`switchfix.capture-pause` file is written and the daemon ignores hotkeys.
 
 ---
 

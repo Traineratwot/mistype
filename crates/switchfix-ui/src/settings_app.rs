@@ -18,6 +18,13 @@ pub struct SettingsApp {
     status: String,
     /// Which hotkey field is currently waiting for a key combination.
     capturing: Option<HotkeyField>,
+    /// Forced modifiers while capturing (checkboxes). Empty = use pressed mods.
+    force_ctrl: bool,
+    force_alt: bool,
+    force_shift: bool,
+    force_meta: bool,
+    /// Daemon pause flag written while capturing so hotkeys don't fire.
+    paused_for_capture: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,9 +43,28 @@ pub enum Message {
     Language(String),
     StartCapture(HotkeyField),
     CancelCapture,
+    ClearHotkey(HotkeyField),
     KeyPressed(Key, Modifiers),
+    ForceCtrl(bool),
+    ForceAlt(bool),
+    ForceShift(bool),
+    ForceMeta(bool),
     Save,
     Close,
+}
+
+/// Path used to pause the daemon while the capture UI is active.
+fn capture_pause_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("switchfix.capture-pause")
+}
+
+fn write_capture_pause(on: bool) {
+    let path = capture_pause_path();
+    if on {
+        let _ = std::fs::write(&path, "1");
+    } else {
+        let _ = std::fs::remove_file(&path);
+    }
 }
 
 fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
@@ -48,30 +74,67 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
         Message::ToggleHotkeyConsume(v) => app.cfg.hotkeys.hotkey_consume = v,
         Message::Language(s) => app.cfg.general.language = s,
         Message::StartCapture(field) => {
+            if !app.paused_for_capture {
+                write_capture_pause(true);
+                app.paused_for_capture = true;
+            }
             app.capturing = Some(field);
-            app.status = "Нажмите сочетание клавиш… (Esc — отмена)".into();
+            app.status =
+                "Нажмите сочетание… (Esc — сбросить клавишу, кнопка «Отмена» — выйти)".into();
         }
         Message::CancelCapture => {
             app.capturing = None;
+            if app.paused_for_capture {
+                write_capture_pause(false);
+                app.paused_for_capture = false;
+            }
             app.status = "Ввод отменён".into();
         }
+        Message::ClearHotkey(field) => {
+            match field {
+                HotkeyField::Selection => app.cfg.hotkeys.convert_selection = String::new(),
+                HotkeyField::Word => app.cfg.hotkeys.convert_last_word = String::new(),
+                HotkeyField::Terminal => app.cfg.hotkeys.convert_terminal = String::new(),
+                HotkeyField::Toggle => app.cfg.hotkeys.toggle_enabled = String::new(),
+            }
+            app.capturing = None;
+            if app.paused_for_capture {
+                write_capture_pause(false);
+                app.paused_for_capture = false;
+            }
+            app.status = "Клавиша сброшена (действие отключено)".into();
+        }
+        Message::ForceCtrl(v) => app.force_ctrl = v,
+        Message::ForceAlt(v) => app.force_alt = v,
+        Message::ForceShift(v) => app.force_shift = v,
+        Message::ForceMeta(v) => app.force_meta = v,
         Message::KeyPressed(key, modifiers) => {
             let Some(field) = app.capturing else {
                 return Task::none();
             };
-            // Escape cancels capture.
+            // Escape clears the binding (disable the action), not just cancel.
             if key == Key::Named(iced::keyboard::key::Named::Escape) {
-                app.capturing = None;
-                app.status = "Ввод отменён".into();
-                return Task::none();
+                return update(app, Message::ClearHotkey(field));
             }
-            // Modifier-only presses are not a complete binding.
-            let Some(combo) = combo_from_key(&key, modifiers) else {
-                // Still report unrecognized keys so the user gets feedback.
+            // Merge checkbox-forced modifiers with live ones.
+            let mut mods = modifiers;
+            if app.force_ctrl {
+                mods |= Modifiers::CTRL;
+            }
+            if app.force_alt {
+                mods |= Modifiers::ALT;
+            }
+            if app.force_shift {
+                mods |= Modifiers::SHIFT;
+            }
+            if app.force_meta {
+                mods |= Modifiers::LOGO;
+            }
+            let Some(combo) = combo_from_key(&key, mods) else {
                 if !matches!(key, Key::Named(_)) || !is_modifier_key(&key) {
-                    app.status =
-                        "Эта клавиша не поддерживается. Попробуйте F1–F12, Insert, Home, буквы."
-                            .into();
+                    app.status = "Эта клавиша не поддерживается. \
+                         Попробуйте F1–F12, Insert, CapsLock, буквы."
+                        .into();
                 }
                 return Task::none();
             };
@@ -82,6 +145,10 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
                 HotkeyField::Toggle => app.cfg.hotkeys.toggle_enabled = combo.clone(),
             }
             app.capturing = None;
+            if app.paused_for_capture {
+                write_capture_pause(false);
+                app.paused_for_capture = false;
+            }
             app.status = format!("Установлено: {}", pretty_hotkey(&combo));
         }
         Message::Save => match app.store.save(&app.cfg) {
@@ -95,6 +162,10 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
             }
         },
         Message::Close => {
+            if app.paused_for_capture {
+                write_capture_pause(false);
+                app.paused_for_capture = false;
+            }
             return iced::exit();
         }
     }
@@ -114,13 +185,7 @@ fn is_modifier_key(key: &Key) -> bool {
     matches!(
         key,
         Key::Named(
-            Named::Control
-                | Named::Shift
-                | Named::Alt
-                | Named::Super
-                | Named::AltGraph
-                | Named::CapsLock
-                | Named::NumLock
+            Named::Control | Named::Shift | Named::Alt | Named::Super | Named::AltGraph
         )
     )
 }
@@ -193,6 +258,11 @@ fn key_name(key: &Key) -> Option<&'static str> {
                 Named::ArrowLeft => "left",
                 Named::ArrowRight => "right",
                 Named::Escape => "escape",
+                Named::CapsLock => "capslock",
+                Named::NumLock => "numlock",
+                Named::ScrollLock => "scrolllock",
+                Named::PrintScreen => "printscreen",
+                Named::ContextMenu => "menu",
                 _ => return None,
             };
             Some(s)
@@ -267,6 +337,11 @@ fn pretty_hotkey(combo: &str) -> String {
                 "end" => "End".to_string(),
                 "pageup" => "PageUp".to_string(),
                 "pagedown" => "PageDown".to_string(),
+                "capslock" | "caps" => "CapsLock".to_string(),
+                "numlock" => "NumLock".to_string(),
+                "scrolllock" => "ScrollLock".to_string(),
+                "printscreen" => "PrintScreen".to_string(),
+                "menu" => "Menu".to_string(),
                 "up" => "↑".to_string(),
                 "down" => "↓".to_string(),
                 "left" => "←".to_string(),
@@ -344,11 +419,32 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
     let cancel_btn = if capturing.is_some() {
         row![
             button("Отмена").on_press(Message::CancelCapture),
-            text("Или нажмите Esc").size(12),
+            button("Сбросить клавишу (Esc)").on_press(Message::ClearHotkey(
+                capturing.unwrap_or(HotkeyField::Selection)
+            )),
+            text("Esc — сбросить, «Отмена» — выйти без изменений").size(12),
         ]
         .spacing(8)
     } else {
         row![].spacing(0)
+    };
+
+    let mod_row = row![
+        checkbox("Ctrl", app.force_ctrl).on_toggle(Message::ForceCtrl),
+        checkbox("Alt", app.force_alt).on_toggle(Message::ForceAlt),
+        checkbox("Shift", app.force_shift).on_toggle(Message::ForceShift),
+        checkbox("Meta", app.force_meta).on_toggle(Message::ForceMeta),
+    ]
+    .spacing(12);
+
+    let mod_hint = if capturing.is_some() {
+        column![
+            text("Модификаторы (галочки добавляются к нажатой клавише):").size(12),
+            mod_row,
+        ]
+        .spacing(6)
+    } else {
+        column![].spacing(0)
     };
 
     let hotkeys = column![
@@ -380,9 +476,10 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
             capturing == Some(HotkeyField::Word),
         ),
         hotkey_row(
-            "Исправить в терминале",
-            "Для Konsole и других терминалов: очищает текущую строку \
-             и вставляет исправленный текст (Ctrl+A, Ctrl+K, Ctrl+Shift+V).",
+            "Исправить в терминале (необязательно)",
+            "Обычно не нужно: SwitchFix сам определяет терминал \
+             (konsole, kitty, …) по имени процесса и использует \
+             очистку строки + Ctrl+Shift+V. Клавиша — только ручной override.",
             &cfg.hotkeys.convert_terminal,
             HotkeyField::Terminal,
             capturing == Some(HotkeyField::Terminal),
@@ -396,6 +493,7 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
             capturing == Some(HotkeyField::Toggle),
         ),
         cancel_btn,
+        mod_hint,
         tooltip(
             checkbox(
                 "Полностью перехватывать назначенные клавиши",
@@ -483,6 +581,11 @@ pub fn run_settings(store: Box<dyn ConfigStore + Send + Sync>) -> iced::Result {
         store,
         status: String::new(),
         capturing: None,
+        force_ctrl: false,
+        force_alt: false,
+        force_shift: false,
+        force_meta: false,
+        paused_for_capture: false,
     };
 
     iced::application("SwitchFix — настройки", update, view)

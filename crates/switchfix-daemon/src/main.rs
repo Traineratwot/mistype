@@ -219,6 +219,16 @@ async fn run_daemon() -> anyhow::Result<()> {
                     }
                 }
             }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(400)) => {
+                // Settings capture UI writes this flag — skip hotkeys while set.
+                let capturing = std::fs::metadata(
+                    std::env::temp_dir().join("switchfix.capture-pause"),
+                ).is_ok();
+                if capturing {
+                    // Drain any queued hotkeys so they don't fire after capture.
+                    while events.try_recv().is_ok() {}
+                }
+            }
         }
     }
 

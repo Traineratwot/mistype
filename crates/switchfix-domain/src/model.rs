@@ -40,6 +40,8 @@ pub struct LayoutInfo {
 /// Key chord for hotkeys and synthetic injection (e.g. Ctrl+Insert).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KeyChord {
+    CtrlC,
+    CtrlShiftC,
     CtrlInsert,
     CtrlV,
     CtrlShiftV,

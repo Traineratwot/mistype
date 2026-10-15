@@ -1,13 +1,14 @@
 //! KDE Plasma platform: full implementation via evdev/uinput + org.kde.keyboard.
 
+mod focus;
 mod layout;
 
 use std::sync::Arc;
 
 use switchfix_app::config::AppConfig;
 use switchfix_app::ports::{
-    ClipboardPort, ConfigStore, HotkeySource, LayoutSwitcher, Notifier, SelectionCapture,
-    TextInjector, TypingBufferPort,
+    ClipboardPort, ConfigStore, FocusMonitor, HotkeySource, LayoutSwitcher, Notifier,
+    SelectionCapture, TextInjector, TypingBufferPort,
 };
 use tracing::{info, warn};
 
@@ -130,6 +131,18 @@ impl Platform for KdePlatform {
         let config: Arc<dyn ConfigStore> = Arc::new(TomlConfigStore::open_default());
         let notifier: Arc<dyn Notifier> = Arc::new(LogNotifier);
 
+        let focus: Option<Arc<dyn FocusMonitor>> =
+            match focus::KdeFocusMonitor::try_connect().await {
+                Some(f) => {
+                    info!("focus monitor ready (KWin/xprop)");
+                    Some(Arc::new(f))
+                }
+                None => {
+                    warn!("focus monitor unavailable — no app filtering");
+                    None
+                }
+            };
+
         Ok(PlatformServices {
             injector,
             clipboard: clipboard.clone() as Arc<dyn ClipboardPort>,
@@ -139,6 +152,7 @@ impl Platform for KdePlatform {
             hotkeys,
             config,
             notifier,
+            focus,
         })
     }
 }

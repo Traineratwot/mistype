@@ -157,8 +157,16 @@ pub struct Behavior {
     /// "line" | "backspaces"
     #[serde(default = "def_term_erase")]
     pub terminal_erase: String,
-    #[serde(default)]
+    /// App ids where corrections are forbidden (password managers, …).
+    #[serde(default = "def_excluded_apps")]
     pub excluded_apps: Vec<String>,
+    /// App ids that should use the terminal paste strategy
+    /// (Ctrl+A / Ctrl+K / Ctrl+Shift+V) without a separate hotkey.
+    #[serde(default = "def_terminal_apps")]
+    pub terminal_apps: Vec<String>,
+    /// Skip corrections when the focused window is fullscreen (games, video).
+    #[serde(default = "def_true")]
+    pub disable_in_fullscreen: bool,
 }
 
 fn def_capture_mode() -> String {
@@ -173,6 +181,23 @@ fn def_term_paste() -> String {
 fn def_term_erase() -> String {
     "line".into()
 }
+fn def_excluded_apps() -> Vec<String> {
+    vec!["keepassxc".into(), "kwalletmanager5".into()]
+}
+fn def_terminal_apps() -> Vec<String> {
+    vec![
+        "konsole".into(),
+        "yakuake".into(),
+        "xterm".into(),
+        "alacritty".into(),
+        "kitty".into(),
+        "foot".into(),
+        "gnome-terminal".into(),
+        "xfce4-terminal".into(),
+        "tilix".into(),
+        "wezterm".into(),
+    ]
+}
 
 impl Default for Behavior {
     fn default() -> Self {
@@ -185,7 +210,9 @@ impl Default for Behavior {
             paste_settle_ms: def_paste_settle(),
             terminal_paste_combo: def_term_paste(),
             terminal_erase: def_term_erase(),
-            excluded_apps: vec!["keepassxc".into(), "kwalletmanager5".into()],
+            excluded_apps: def_excluded_apps(),
+            terminal_apps: def_terminal_apps(),
+            disable_in_fullscreen: true,
         }
     }
 }
@@ -247,6 +274,10 @@ impl AppConfig {
             ("hotkeys.convert_terminal", &self.hotkeys.convert_terminal),
             ("hotkeys.toggle_enabled", &self.hotkeys.toggle_enabled),
         ] {
+            // Empty = action disabled (Esc reset in the settings UI).
+            if value.trim().is_empty() {
+                continue;
+            }
             if !is_valid_hotkey(value) {
                 errs.push(ConfigInvalid::Hotkey {
                     field: field.to_string(),
@@ -302,9 +333,11 @@ fn is_valid_hotkey(s: &str) -> bool {
         || matches!(
             key,
             "f1" | "f2" | "f3" | "f4" | "f5" | "f6" | "f7" | "f8" | "f9" | "f10" | "f11"
-                | "f12" | "pause" | "break" | "space" | "tab" | "enter" | "return" | "esc"
+                | "f12" | "f13" | "f14" | "f15" | "f16" | "f17" | "f18" | "f19" | "f20"
+                | "pause" | "break" | "space" | "tab" | "enter" | "return" | "esc"
                 | "escape" | "backspace" | "delete" | "insert" | "home" | "end" | "pageup"
                 | "pagedown" | "up" | "down" | "left" | "right"
+                | "capslock" | "caps" | "numlock" | "scrolllock" | "menu" | "printscreen"
         );
     if !key_ok {
         return false;
@@ -346,13 +379,16 @@ mod tests {
     #[test]
     fn rejects_bad_hotkey() {
         let mut cfg = AppConfig::default();
+        // Empty = disabled (Esc reset) — valid.
         cfg.hotkeys.convert_selection = "".into();
-        assert!(cfg.validate().is_err());
+        assert!(cfg.validate().is_ok());
         cfg.hotkeys.convert_selection = "ctrl+".into();
         assert!(cfg.validate().is_err());
         cfg.hotkeys.convert_selection = "f1".into();
         assert!(cfg.validate().is_ok());
         cfg.hotkeys.convert_selection = "ctrl+shift+f1".into();
+        assert!(cfg.validate().is_ok());
+        cfg.hotkeys.convert_selection = "capslock".into();
         assert!(cfg.validate().is_ok());
         cfg.hotkeys.convert_selection = "hyper+ctrl+f1".into();
         assert!(cfg.validate().is_err());
