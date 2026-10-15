@@ -73,6 +73,15 @@ pub struct SavedClipboard {
     pub text: Option<String>,
 }
 
+/// Result of a successful selection capture (marker protocol).
+///
+/// Carries the user clipboard snapshot so the caller can restore it after paste.
+#[derive(Debug, Clone)]
+pub struct CapturedSelection {
+    pub text: String,
+    pub saved: SavedClipboard,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotifyLevel {
     Info,
@@ -108,8 +117,9 @@ pub trait ClipboardPort: Send + Sync {
 
 #[async_trait]
 pub trait SelectionCapture: Send + Sync {
-    /// Clipboard-marker protocol. `Ok(None)` = no selection (marker survived).
-    async fn capture_selection(&self) -> Result<Option<String>, CaptureError>;
+    /// Clipboard-marker protocol. `Ok(None)` = no selection (marker survived
+    /// and the user clipboard has already been restored).
+    async fn capture_selection(&self) -> Result<Option<CapturedSelection>, CaptureError>;
 }
 
 #[async_trait]

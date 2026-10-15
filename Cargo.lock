@@ -3679,6 +3679,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "switchfix-tests"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "switchfix-app",
+ "switchfix-domain",
+ "tokio",
+]
+
+[[package]]
 name = "switchfix-ui"
 version = "0.1.0"
 dependencies = [

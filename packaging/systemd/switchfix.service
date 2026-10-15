@@ -1,0 +1,38 @@
+[Unit]
+Description=SwitchFix — fix text typed in the wrong keyboard layout
+Documentation=file:///usr/share/doc/switchfix/MANUAL.md
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/switchfix daemon
+Restart=on-failure
+RestartSec=2
+
+# Sandboxing (user service — keep it tight but allow /dev/input + /dev/uinput + D-Bus).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+# evdev/uinput need /dev/input and /dev/uinput.
+DeviceAllow=/dev/input/event* rw
+DeviceAllow=/dev/uinput rw
+DevicePolicy=closed
+# Config lives in ~/.config/switchfix (read-only is enough for daemon).
+ReadOnlyPaths=%h/.config/switchfix
+# Logs must not contain typed text (see PRIVACY.md).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=switchfix
+
+[Install]
+WantedBy=graphical-session.target

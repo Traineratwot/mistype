@@ -6,6 +6,7 @@ members = [
     "crates/switchfix-adapters",
     "crates/switchfix-ui",
     "crates/switchfix-daemon",
+    "crates/switchfix-tests",
 ]
 
 [workspace.package]

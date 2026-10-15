@@ -109,9 +109,9 @@ impl Tray for SwitchFixTray {
         vec![
             MenuItem::Standard(StandardItem {
                 label: if self.model.is_enabled() {
-                    "Приостановить".into()
+                    "Приостановить SwitchFix".into()
                 } else {
-                    "Включить".into()
+                    "Включить SwitchFix".into()
                 },
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.model.cmd_tx.try_send(TrayCommand::ToggleEnabled);
@@ -120,14 +120,14 @@ impl Tray for SwitchFixTray {
             }),
             MenuItem::Separator,
             MenuItem::Standard(StandardItem {
-                label: "Конвертировать выделение".into(),
+                label: "Исправить выделенный текст".into(),
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.model.cmd_tx.try_send(TrayCommand::ConvertSelection);
                 }),
                 ..Default::default()
             }),
             MenuItem::Standard(StandardItem {
-                label: "Конвертировать последнее слово".into(),
+                label: "Исправить последнее слово".into(),
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.model.cmd_tx.try_send(TrayCommand::ConvertLastWord);
                 }),

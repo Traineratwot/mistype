@@ -1,12 +1,12 @@
 //! SwitchFix — fix text typed in the wrong keyboard layout.
 
 mod doctor;
+mod setup;
 mod wiring;
 
 use clap::{Parser, Subcommand};
-use switchfix_app::ports::ConfigStore;
 use switchfix_domain::CorrectionRequest;
-use switchfix_ui::tray::{TrayCommand, TrayModel};
+use switchfix_ui::tray::TrayModel;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -31,6 +31,12 @@ enum Command {
     },
     /// Print diagnostics.
     Doctor,
+    /// Interactive setup (input group, udev rule, user service). Asks for sudo only when needed.
+    Setup {
+        /// Answer "yes" to all prompts (sudo password may still be requested).
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
     /// Toggle enabled/paused state of a running daemon (via file flag for now).
     Toggle,
 }
@@ -52,6 +58,10 @@ async fn main() -> anyhow::Result<()> {
             if !report.all_ok() {
                 std::process::exit(1);
             }
+        }
+        Command::Setup { yes } => {
+            let report = setup::run(yes);
+            report.print();
         }
         Command::Convert { text } => {
             let input = match text {

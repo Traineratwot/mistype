@@ -8,7 +8,7 @@ pub mod state;
 
 pub use buffer::{TypingBuffer, WordSpan};
 pub use conversion::{
-    convert, detect_direction, en_to_ru_map, ConversionSet, ConversionTable, ConvertedText,
+    convert, detect_direction, en_to_ru_map, ConversionSet, ConversionTable, ConvertedText, MapFile,
 };
 pub use error::DomainError;
 pub use model::{

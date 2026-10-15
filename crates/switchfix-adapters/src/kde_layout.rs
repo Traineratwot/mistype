@@ -17,18 +17,24 @@ use zbus::proxy;
 )]
 trait KeyboardLayouts {
     /// Returns current layout index (0-based).
+    /// Plasma uses camelCase D-Bus names — zbus would otherwise PascalCase them.
+    #[zbus(name = "getLayout")]
     fn get_layout(&self) -> zbus::Result<u32>;
     /// Returns list of (short_id, ?, display_name).
+    #[zbus(name = "getLayoutsList")]
     fn get_layouts_list(&self) -> zbus::Result<Vec<(String, String, String)>>;
     /// Set layout by index; returns success.
+    #[zbus(name = "setLayout")]
     fn set_layout(&self, index: u32) -> zbus::Result<bool>;
+    #[zbus(name = "switchToNextLayout")]
     fn switch_to_next_layout(&self) -> zbus::Result<()>;
+    #[zbus(name = "switchToPreviousLayout")]
     fn switch_to_previous_layout(&self) -> zbus::Result<()>;
 
-    #[zbus(signal)]
+    #[zbus(signal, name = "layoutChanged")]
     fn layout_changed(&self, index: u32) -> zbus::Result<()>;
 
-    #[zbus(signal)]
+    #[zbus(signal, name = "layoutListChanged")]
     fn layout_list_changed(&self) -> zbus::Result<()>;
 }
 
@@ -159,5 +165,36 @@ impl LayoutSwitcher for KdeLayoutSwitcher {
 
     fn subscribe(&self) -> broadcast::Receiver<LayoutIndex> {
         self.tx.subscribe()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Live smoke against a real KDE session. Ignored by default.
+    /// Run: `cargo test -p switchfix-adapters -- --ignored`
+    #[tokio::test]
+    #[ignore = "needs a live KDE Plasma session bus (org.kde.keyboard)"]
+    async fn live_kde_layout_roundtrip() {
+        let sw = KdeLayoutSwitcher::connect().await.expect("connect");
+        let before = sw.current().await.expect("current");
+        let list = sw.layouts().await.expect("layouts");
+        assert!(!list.is_empty(), "no layouts configured in KDE?");
+        eprintln!("layouts={list:?} current={before:?}");
+
+        // Switch to another index and back (safe even with one layout).
+        let target = list
+            .iter()
+            .find(|l| l.index != before)
+            .map(|l| l.index)
+            .unwrap_or(before);
+        sw.set(target).await.expect("set");
+        let mid = sw.current().await.expect("current after set");
+        assert_eq!(mid, target, "set() did not stick");
+
+        sw.set(before).await.expect("restore");
+        let after = sw.current().await.expect("current after restore");
+        assert_eq!(after, before, "failed to restore original layout");
     }
 }

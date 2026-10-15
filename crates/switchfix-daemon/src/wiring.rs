@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use switchfix_adapters::config_store::{ensure_config, TomlConfigStore};
-use switchfix_adapters::evdev_hotkey::{EvdevHotkeySource, SharedTypingBuffer};
+use switchfix_adapters::evdev_hotkey::SharedTypingBuffer;
 use switchfix_adapters::kde_layout::KdeLayoutSwitcher;
 use switchfix_adapters::uinput_injector::UinputInjector;
 use switchfix_adapters::WaylandClipboard;
@@ -17,6 +17,9 @@ use switchfix_domain::ConversionSet;
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
+/// Composition root handle. Extra fields are kept for settings reload / shutdown
+/// wiring and are part of the daemon API.
+#[allow(dead_code)]
 pub struct AppContext {
     pub service: Arc<CorrectionService>,
     pub config_tx: watch::Sender<AppConfig>,
@@ -119,11 +122,46 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
         cfg.behavior.copy_settle_ms,
     ));
 
-    // Hotkeys
+    // Hotkeys (from config; consume mode EVIOCGRABs so the key never leaks to apps)
+    let hotkey_bindings = [
+        (
+            cfg.hotkeys.convert_selection.clone(),
+            switchfix_app::ports::HotkeyEvent::ConvertSelection,
+        ),
+        (
+            cfg.hotkeys.convert_last_word.clone(),
+            switchfix_app::ports::HotkeyEvent::ConvertLastWord,
+        ),
+        (
+            cfg.hotkeys.convert_terminal.clone(),
+            switchfix_app::ports::HotkeyEvent::ConvertTerminal,
+        ),
+        (
+            cfg.hotkeys.toggle_enabled.clone(),
+            switchfix_app::ports::HotkeyEvent::ToggleEnabled,
+        ),
+    ];
+    let mut parsed_bindings = Vec::new();
+    for (s, ev) in hotkey_bindings {
+        match switchfix_app::HotkeyBinding::parse(&s) {
+            Some(b) => parsed_bindings.push((b, ev)),
+            None => warn!("invalid hotkey in config: {s:?}"),
+        }
+    }
+
     let hotkeys: Box<dyn HotkeySource> = if opts.allow_evdev {
-        match EvdevHotkeySource::open(buffer.clone()) {
+        match switchfix_adapters::evdev_hotkey::EvdevHotkeySource::open_with(
+            switchfix_adapters::evdev_hotkey::EvdevOptions {
+                bindings: parsed_bindings,
+                consume: cfg.hotkeys.hotkey_consume,
+                buffer: buffer.clone(),
+            },
+        ) {
             Ok(h) => {
-                info!("evdev hotkeys active");
+                info!(
+                    "evdev hotkeys active (consume={})",
+                    cfg.hotkeys.hotkey_consume
+                );
                 Box::new(h)
             }
             Err(e) => {

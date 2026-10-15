@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use switchfix_app::ports::{
-    CaptureError, ClipboardError, ClipboardPort, InjectError, SavedClipboard, SelectionCapture,
-    TextInjector,
+    CaptureError, CapturedSelection, ClipboardError, ClipboardPort, InjectError, SavedClipboard,
+    SelectionCapture, TextInjector,
 };
 use switchfix_domain::KeyChord;
 use tokio::sync::Mutex as AsyncMutex;
@@ -82,14 +82,18 @@ impl SelectionCapture for WaylandClipboard {
     /// 2. put unique marker
     /// 3. press Ctrl+Insert (copy selection)
     /// 4. read clipboard — if marker survived, there was no selection
-    async fn capture_selection(&self) -> Result<Option<String>, CaptureError> {
+    ///
+    /// On success returns the selected text plus the saved clipboard snapshot
+    /// so the caller can restore it after replacing the selection.
+    async fn capture_selection(&self) -> Result<Option<CapturedSelection>, CaptureError> {
         let _g = self.lock.lock().await;
 
         let marker = format!("SWITCHFIX_MARK_{}", Uuid::new_v4());
         let saved = Self::get_text_sync().ok();
-        *self.last_save.lock().unwrap() = Some(SavedClipboard {
+        let snap = SavedClipboard {
             text: saved.clone(),
-        });
+        };
+        *self.last_save.lock().unwrap() = Some(snap.clone());
 
         Self::put_text_sync(&marker).map_err(|e| CaptureError::Failed(e.to_string()))?;
 
@@ -109,15 +113,18 @@ impl SelectionCapture for WaylandClipboard {
 
         if now == marker {
             // No selection — restore clipboard immediately.
-            if let Some(s) = saved {
-                let _ = Self::put_text_sync(&s);
+            if let Some(s) = &saved {
+                let _ = Self::put_text_sync(s);
             }
             *self.last_save.lock().unwrap() = None;
             return Ok(None);
         }
 
         debug!("selection captured ({} chars)", now.chars().count());
-        Ok(Some(now))
+        Ok(Some(CapturedSelection {
+            text: now,
+            saved: snap,
+        }))
     }
 }
 

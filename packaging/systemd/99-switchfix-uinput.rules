@@ -1,0 +1,4 @@
+# Allow members of group `input` to open /dev/uinput without root.
+# Install to /etc/udev/rules.d/99-switchfix-uinput.rules then:
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"

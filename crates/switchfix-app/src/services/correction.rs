@@ -13,8 +13,8 @@ use tracing::{debug, warn};
 
 use crate::config::AppConfig;
 use crate::ports::{
-    ClipboardPort, LayoutSwitcher, NotifyLevel, Notifier, SelectionCapture,
-    TextInjector, TypingBufferPort,
+    CapturedSelection, ClipboardPort, LayoutSwitcher, NotifyLevel, Notifier, SavedClipboard,
+    SelectionCapture, TextInjector, TypingBufferPort,
 };
 
 /// Orchestrates capture → convert → replace → switch-layout.
@@ -129,7 +129,7 @@ impl CorrectionService {
         let cfg = self.cfg();
 
         let captured = match self.selection.capture_selection().await {
-            Ok(Some(text)) => text,
+            Ok(Some(sel)) => sel,
             Ok(None) => {
                 if cfg.behavior.fallback_to_word_on_no_selection {
                     return self.convert_last_word().await;
@@ -183,10 +183,10 @@ impl CorrectionService {
         // Terminal mode: use last word from buffer (or selection), then
         // clear the input line and paste via Ctrl+Shift+V.
         let cfg = self.cfg();
-        let text = match self.buffer.take_last_word() {
-            Some(span) => span.text,
+        let (text, saved) = match self.buffer.take_last_word() {
+            Some(span) => (span.text, None),
             None => match self.selection.capture_selection().await {
-                Ok(Some(t)) => t,
+                Ok(Some(sel)) => (sel.text, Some(sel.saved)),
                 _ => return CorrectionOutcome::NoInputFound,
             },
         };
@@ -195,6 +195,9 @@ impl CorrectionService {
             Ok(c) => c,
             Err(e) => {
                 debug!("convert terminal: {e}");
+                if let Some(s) = saved {
+                    self.restore_clipboard(s, &cfg).await;
+                }
                 return CorrectionOutcome::NoInputFound;
             }
         };
@@ -203,6 +206,7 @@ impl CorrectionService {
 
         // Put result in clipboard first.
         if let Err(e) = self.clipboard.put_text(&converted.converted).await {
+            self.restore_clipboard_optional(saved, &cfg).await;
             return CorrectionOutcome::Failed(format!("clipboard put: {e}"));
         }
 
@@ -215,8 +219,12 @@ impl CorrectionService {
         }
 
         if let Err(e) = self.injector.chord(KeyChord::CtrlShiftV).await {
+            self.restore_clipboard_optional(saved, &cfg).await;
             return CorrectionOutcome::Failed(format!("paste: {e}"));
         }
+
+        tokio::time::sleep(Duration::from_millis(cfg.behavior.paste_settle_ms)).await;
+        self.restore_clipboard_optional(saved, &cfg).await;
 
         self.switch_layout_for(&converted.converted).await;
 
@@ -227,14 +235,16 @@ impl CorrectionService {
         }
     }
 
-    async fn replace_via_clipboard(&self, selected: String) -> CorrectionOutcome {
+    async fn replace_via_clipboard(&self, captured: CapturedSelection) -> CorrectionOutcome {
         let cfg = self.cfg();
+        let CapturedSelection { text: selected, saved } = captured;
 
         let converted = match convert(&selected, &self.tables, None, None) {
             Ok(c) => c,
             Err(e) => {
                 debug!("convert selection: {e}");
-                // Restore clipboard if we dirtied it — capture_selection already saved.
+                // Nothing was pasted — put the user clipboard back.
+                self.restore_clipboard(saved, &cfg).await;
                 return CorrectionOutcome::NoInputFound;
             }
         };
@@ -242,10 +252,12 @@ impl CorrectionService {
         let _ = self.state_tx.send(CorrectionState::Replacing);
 
         if let Err(e) = self.clipboard.put_text(&converted.converted).await {
+            self.restore_clipboard(saved, &cfg).await;
             return CorrectionOutcome::Failed(format!("clipboard put: {e}"));
         }
 
         if let Err(e) = self.injector.chord(KeyChord::CtrlV).await {
+            self.restore_clipboard(saved, &cfg).await;
             return CorrectionOutcome::Failed(format!("paste: {e}"));
         }
 
@@ -253,11 +265,8 @@ impl CorrectionService {
         tokio::time::sleep(Duration::from_millis(cfg.behavior.paste_settle_ms)).await;
 
         let _ = self.state_tx.send(CorrectionState::RestoringClipboard);
-        // Restore is handled inside SelectionCapture protocol (it saved the clipboard).
-        // SelectionCapture implementations that own restore will do it; we also try
-        // a best-effort no-op here if the capture port already restored.
-        // For ports that don't, we cannot restore without the snapshot — the
-        // SelectionCapture adapter is responsible (see adapters::clipboard).
+        self.restore_clipboard(saved, &cfg).await;
+
         let _ = self.state_tx.send(CorrectionState::SwitchingLayout);
         self.switch_layout_for(&converted.converted).await;
 
@@ -265,6 +274,26 @@ impl CorrectionService {
             original: converted.original,
             converted: converted.converted,
             layout_switched_to: None,
+        }
+    }
+
+    /// Best-effort clipboard restore (never fails the conversion).
+    async fn restore_clipboard(&self, saved: SavedClipboard, cfg: &AppConfig) {
+        if !cfg.behavior.restore_clipboard {
+            return;
+        }
+        if let Err(e) = self.clipboard.restore(saved).await {
+            warn!("clipboard restore failed: {e}");
+            let _ = self
+                .notifier
+                .notify("Не удалось восстановить буфер обмена", NotifyLevel::Warning)
+                .await;
+        }
+    }
+
+    async fn restore_clipboard_optional(&self, saved: Option<SavedClipboard>, cfg: &AppConfig) {
+        if let Some(s) = saved {
+            self.restore_clipboard(s, cfg).await;
         }
     }
 
@@ -387,8 +416,11 @@ mod tests {
 
     #[async_trait]
     impl SelectionCapture for FakeSelection {
-        async fn capture_selection(&self) -> Result<Option<String>, CaptureError> {
-            Ok(self.text.clone())
+        async fn capture_selection(&self) -> Result<Option<CapturedSelection>, CaptureError> {
+            Ok(self.text.clone().map(|text| CapturedSelection {
+                text,
+                saved: SavedClipboard { text: None },
+            }))
         }
     }
 
@@ -548,6 +580,20 @@ mod tests {
         assert!(log.iter().any(|l| l.contains("chord:CtrlV")), "log={log:?}");
         let clog = clip.log.lock().unwrap().clone();
         assert!(clog.iter().any(|l| l == "put:привет"), "clog={clog:?}");
+        // Clipboard must be restored after paste (plan §6).
+        assert!(clog.iter().any(|l| l == "restore"), "clog={clog:?}");
+    }
+
+    #[tokio::test]
+    async fn selection_no_convert_restores_clipboard() {
+        // "123" has no letters → convert fails → clipboard restored, no paste.
+        let (svc, inj, clip, _b) = service(Some("123".into()), None, false, true);
+        let out = svc.handle(CorrectionRequest::ConvertSelection).await;
+        assert_eq!(out, CorrectionOutcome::NoInputFound);
+        let log = inj.log.lock().unwrap().clone();
+        assert!(!log.iter().any(|l| l.contains("chord:CtrlV")), "log={log:?}");
+        let clog = clip.log.lock().unwrap().clone();
+        assert!(clog.iter().any(|l| l == "restore"), "clog={clog:?}");
     }
 
     #[tokio::test]

@@ -35,6 +35,26 @@ impl ConversionTable {
     }
 }
 
+/// On-disk / custom map format (`assets/maps/*.json`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MapFile {
+    pub name: String,
+    pub from: String,
+    pub to: String,
+    pub map: HashMap<char, char>,
+}
+
+impl MapFile {
+    pub fn parse(json: &str) -> Result<Self, DomainError> {
+        serde_json::from_str(json)
+            .map_err(|e| DomainError::InvalidLayout(format!("map json: {e}")))
+    }
+
+    pub fn into_table(self) -> ConversionTable {
+        ConversionTable::new(LayoutId::new(self.from), LayoutId::new(self.to), self.map)
+    }
+}
+
 /// Set of tables covering the active layout pair(s).
 #[derive(Debug, Clone, Default)]
 pub struct ConversionSet {
@@ -330,5 +350,51 @@ mod tests {
         )
         .unwrap();
         assert_eq!(r.converted, "\"№;");
+    }
+
+    #[test]
+    fn json_map_roundtrip() {
+        let built = en_to_ru_map();
+        let json = serde_json::json!({
+            "name": "en-ru",
+            "from": "us",
+            "to": "ru",
+            "map": built,
+        })
+        .to_string();
+        let file = MapFile::parse(&json).unwrap();
+        assert_eq!(file.name, "en-ru");
+        assert_eq!(file.from, "us");
+        assert_eq!(file.to, "ru");
+        let table = file.into_table();
+        assert_eq!(table.convert_char('q'), Some('й'));
+        assert_eq!(table.map.len(), built.len());
+    }
+
+    #[test]
+    fn json_map_bad_is_error() {
+        assert!(MapFile::parse("not json").is_err());
+        assert!(MapFile::parse(r#"{"name":"x"}"#).is_err());
+    }
+
+    #[test]
+    fn asset_maps_are_inverses() {
+        // Keep assets/maps/{en2ru,ru2en}.json in sync with the built-in map.
+        let en2ru = MapFile::parse(include_str!("../../../assets/maps/en2ru.json")).unwrap();
+        let ru2en = MapFile::parse(include_str!("../../../assets/maps/ru2en.json")).unwrap();
+        assert_eq!(en2ru.from, "us");
+        assert_eq!(en2ru.to, "ru");
+        assert_eq!(ru2en.from, "ru");
+        assert_eq!(ru2en.to, "us");
+
+        let built = en_to_ru_map();
+        assert_eq!(en2ru.map.len(), built.len());
+        for (k, v) in &built {
+            assert_eq!(en2ru.map.get(k), Some(v), "en2ru mismatch for {k:?}");
+        }
+
+        for (k, v) in &en2ru.map {
+            assert_eq!(ru2en.map.get(v), Some(k), "ru2en not inverse of {k:?}->{v:?}");
+        }
     }
 }

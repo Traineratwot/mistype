@@ -1,0 +1,38 @@
+#!/bin/sh
+# postinst — do NOT enable the service automatically (see PLAN.md §8).
+# Runs as root under apt/dpkg, so no sudo password is needed here; interactive
+# privileged fixes live in `switchfix setup` for the end user.
+set -e
+
+case "$1" in
+  configure)
+    # Refresh desktop/icon caches when available.
+    if command -v update-desktop-database >/dev/null 2>&1; then
+      update-desktop-database -q /usr/share/applications || true
+    fi
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+      gtk-update-icon-cache -q /usr/share/icons/hicolor || true
+    fi
+
+    cat <<'EOF' >&2
+switchfix: installed.
+
+  * Global hotkeys need group 'input'. Fix interactively (asks for sudo
+    password only for the steps you confirm):
+        switchfix setup
+    or manually:
+        sudo usermod -aG input $USER    # then log out and back in
+
+  * Enable the tray daemon when ready (not enabled automatically):
+        systemctl --user enable --now switchfix
+
+  * Diagnostics:
+        switchfix doctor
+
+  Privacy notes: /usr/share/doc/switchfix/PRIVACY.md
+  Security notes: /usr/share/doc/switchfix/SECURITY.md
+EOF
+    ;;
+esac
+
+exit 0

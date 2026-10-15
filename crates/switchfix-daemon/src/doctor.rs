@@ -17,8 +17,8 @@ impl DoctorReport {
         let failed = self.lines.iter().filter(|(_, ok, _)| !ok).count();
         if failed > 0 {
             println!("\n{failed} check(s) failed.");
-            println!("Hint: add yourself to the 'input' group and re-login:");
-            println!("  sudo usermod -aG input $USER");
+            println!("Fix interactively (asks for sudo only when needed):");
+            println!("  switchfix setup");
         } else {
             println!("\nAll checks passed.");
         }
@@ -83,31 +83,35 @@ pub async fn run() -> DoctorReport {
         format!("{kb_count} /dev/input/event* nodes"),
     ));
 
-    // input group
-    let in_input_group = std::fs::read_to_string("/proc/self/status")
-        .map(|s| {
-            // fallback: check groups via id
-            let _ = s;
-            false
-        })
-        .unwrap_or(false);
-    let groups = std::process::Command::new("id")
+    // input group — check both the current session and the passwd database.
+    let groups_session = std::process::Command::new("id")
         .arg("-nG")
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
-    let has_input = groups.split_whitespace().any(|g| g == "input");
-    lines.push((
-        "group input".into(),
-        has_input,
-        if has_input {
-            "user is in 'input' group".into()
-        } else {
-            format!("not in 'input' group (id -nG: {groups})")
-        },
-    ));
-    let _ = in_input_group;
+    let user = std::env::var("USER").unwrap_or_default();
+    let groups_passwd = std::process::Command::new("id")
+        .arg("-nG")
+        .arg(&user)
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_else(|| groups_session.clone());
+    let has_input_session = groups_session.split_whitespace().any(|g| g == "input");
+    let has_input_passwd = groups_passwd.split_whitespace().any(|g| g == "input");
+    let (input_ok, input_detail) = match (has_input_passwd, has_input_session) {
+        (true, true) => (true, "user is in 'input' group".into()),
+        (true, false) => (
+            true,
+            "user is in 'input' group (log out and back in for this session)".into(),
+        ),
+        (false, _) => (
+            false,
+            format!("not in 'input' group (id -nG {user}: {groups_passwd})"),
+        ),
+    };
+    lines.push(("group input".into(), input_ok, input_detail));
 
     // D-Bus org.kde.keyboard
     let layouts_ok = match zbus::Connection::session().await {
@@ -119,17 +123,32 @@ pub async fn run() -> DoctorReport {
                 default_path = "/Layouts"
             )]
             trait Probe {
+                #[zbus(name = "getLayout")]
                 fn get_layout(&self) -> zbus::Result<u32>;
+                #[zbus(name = "getLayoutsList")]
                 fn get_layouts_list(&self) -> zbus::Result<Vec<(String, String, String)>>;
+                #[zbus(name = "setLayout")]
+                fn set_layout(&self, index: u32) -> zbus::Result<bool>;
             }
             match ProbeProxy::new(&conn).await {
                 Ok(p) => match p.get_layouts_list().await {
                     Ok(list) => {
                         let names: Vec<_> = list.iter().map(|(s, _, n)| format!("{s}({n})")).collect();
                         let cur = p.get_layout().await.unwrap_or(999);
+                        // Write probe: setLayout(current) is a safe no-op that
+                        // verifies the set path actually works.
+                        let write_ok = p.set_layout(cur).await.unwrap_or(false);
+                        let write_note = if write_ok {
+                            "setLayout ok"
+                        } else {
+                            "setLayout rejected"
+                        };
                         (
-                            true,
-                            format!("layouts: [{}] current index {cur}", names.join(", ")),
+                            write_ok,
+                            format!(
+                                "layouts: [{}] current index {cur} ({write_note})",
+                                names.join(", ")
+                            ),
                         )
                     }
                     Err(e) => (false, format!("getLayoutsList failed: {e}")),
