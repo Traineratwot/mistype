@@ -39,6 +39,8 @@ enum Command {
     },
     /// Toggle enabled/paused state of a running daemon (via file flag for now).
     Toggle,
+    /// Ask a running daemon to reload config.toml and layout maps.
+    Reload,
     /// Play the hotkey feedback sound (and print a note) — smoke-test audio.
     Beep,
     /// Inject a synthetic hotkey (ctrl+f20) and verify evdev interception works.
@@ -85,7 +87,8 @@ async fn main() -> anyhow::Result<()> {
                     s.trim_end_matches('\n').to_string()
                 }
             };
-            let tables = switchfix_domain::ConversionSet::en_ru();
+            let _ = switchfix_adapters::seed_default_maps();
+            let tables = switchfix_adapters::load_conversion_set();
             match switchfix_domain::convert(&input, &tables, None, None) {
                 Ok(c) => {
                     println!("{}", c.converted);
@@ -104,9 +107,28 @@ async fn main() -> anyhow::Result<()> {
         Command::Settings => {
             let store = switchfix_adapters::TomlConfigStore::open_default();
             let cfg = switchfix_adapters::ensure_config(&store);
+            let _ = switchfix_adapters::seed_default_maps();
             info!("opening settings (config at {:?})", store.path());
             let _ = cfg;
-            switchfix_ui::run_settings(Box::new(store))?;
+            let config_dir = store
+                .path()
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| {
+                    dirs::config_dir()
+                        .unwrap_or_else(|| std::path::PathBuf::from("."))
+                        .join("switchfix")
+                });
+            switchfix_ui::run_settings(Box::new(store), config_dir)?;
+        }
+        Command::Reload => {
+            let path = std::env::temp_dir().join("switchfix.reload");
+            let token = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            std::fs::write(&path, token.to_string())?;
+            println!("reload signaled");
         }
         Command::Toggle => {
             // Simple toggle via a state file the daemon watches (MVP).
@@ -318,6 +340,8 @@ async fn run_daemon() -> anyhow::Result<()> {
     // Also poll the toggle state file for `switchfix toggle`.
     let toggle_path = std::env::temp_dir().join("switchfix.enabled");
     let mut last_toggle = std::fs::read_to_string(&toggle_path).unwrap_or_else(|_| "1".into());
+    let reload_path = std::env::temp_dir().join("switchfix.reload");
+    let mut last_reload = std::fs::read_to_string(&reload_path).unwrap_or_default();
     let suggest_cmd_path = switchfix_adapters::platform::portable::suggest_cmd_path();
 
     loop {
@@ -399,6 +423,25 @@ async fn run_daemon() -> anyhow::Result<()> {
                         if let Some(s) = &spell {
                             s.set_enabled(service.is_enabled());
                         }
+                    }
+                }
+                // Config / maps reload (settings button or `switchfix reload`).
+                if let Ok(token) = std::fs::read_to_string(&reload_path) {
+                    if token != last_reload {
+                        last_reload = token.clone();
+                        match ctx.store.load() {
+                            Ok(cfg) => {
+                                ctx.config_tx.send_replace(cfg);
+                                info!("config reloaded from disk");
+                            }
+                            Err(e) => warn!("config reload failed, keeping previous: {e}"),
+                        }
+                        let tables = switchfix_adapters::load_conversion_set();
+                        service.replace_tables(tables.clone());
+                        if let Some(s) = &spell {
+                            s.replace_tables(tables);
+                        }
+                        info!("layout maps reloaded (hotkeys still need a daemon restart)");
                     }
                 }
             }

@@ -4,8 +4,8 @@ pub mod platform;
 
 pub use platform::portable::config_store::{ensure_config, TomlConfigStore};
 pub use platform::portable::{
-    NullSuggestionPresenter, SharedSuggestionPresenter, SharedTypingBuffer, SuggestionState,
-    ZspellDictionary,
+    load_conversion_set, seed_default_maps, user_maps_dir, NullSuggestionPresenter,
+    SharedSuggestionPresenter, SharedTypingBuffer, SuggestionState, ZspellDictionary,
 };
 pub use platform::{
     create_platform, create_platform_from, detect, detect_from, detect_os, parse_desktop,

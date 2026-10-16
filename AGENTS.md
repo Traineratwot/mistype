@@ -218,6 +218,7 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 | `doctor` | Diagnostics: platform, groups, uinput, D-Bus, **hotkeys**, sound, **dictionaries** |
 | `setup [-y]` | Interactive privileged setup (sudo only for root steps) |
 | `toggle` | Flip enabled/paused via temp state file |
+| `reload` | Signal a running daemon to re-read `config.toml` + `maps/` |
 | `beep` | Play hotkey feedback sound |
 | `selftest` | Inject `ctrl+f20` via uinput, assert evdev intercepts it |
 
@@ -247,6 +248,23 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 Settings UI: click field → press combo → saved; Esc **clears** the binding;
 checkboxes Ctrl/Alt/Shift/Meta force modifiers; while capturing a
 `switchfix.capture-pause` file is written and the daemon ignores hotkeys.
+
+Footer actions:
+- **«Редактировать конфиг»** — `xdg-open ~/.config/switchfix/` (`config.toml` + `maps/`).
+- **«Перезагрузить конфиг»** — re-reads the form from disk and writes
+  `$TMPDIR/switchfix.reload`; the daemon applies `config` + maps within ~2 s.
+  **Hotkeys still require a daemon restart.**
+
+### Layout maps (`~/.config/switchfix/maps/`)
+
+User-editable `en2ru.json` / `ru2en.json` (`MapFile` schema: `name`, `from`,
+`to`, `map`). Seeded once when the directory has no `*.json`; edits are never
+overwritten; deleted files are not restored. Invalid JSON is skipped with a
+warning; if nothing loads, the built-in EN↔RU table is used.
+
+Helpers: `switchfix_adapters::{seed_default_maps, load_conversion_set}` in
+`platform/portable/maps.rs`. `CorrectionService::replace_tables` /
+`SpellService::replace_tables` swap tables on reload.
 
 ---
 
@@ -309,6 +327,18 @@ A: Hybrid GPU + Wayland wgpu panic. We force `WGPU_BACKEND=gl`. Don't remove.
 
 **Q: I changed a hotkey in Settings but it still uses the old one.**  
 A: MVP reads bindings at daemon start. **Restart the daemon.**
+
+**Q: How do I change the layout map / terminal app list?**  
+A: Settings → «Редактировать конфиг» → edit `maps/en2ru.json` (MapFile schema)
+or `behavior.terminal_apps` in `config.toml` → «Перезагрузить конфиг»
+(or `switchfix reload`). Maps + `terminal_apps` apply without restart;
+hotkeys still need one. Save in Settings **overwrites** `config.toml` —
+prefer hand-edits then Reload, don't Save afterwards unless you meant to.
+
+**Q: Reload button does nothing.**  
+A: Daemon polls `$TMPDIR/switchfix.reload` every ~2 s. Check
+`RUST_LOG=info` for `config reloaded` / `layout maps reloaded`. No daemon
+running = only the Settings form is refreshed.
 
 **Q: Spellcheck does nothing / no bar.**  
 A: (1) `switchfix doctor` → `spell dictionaries` must show `loaded [ru, en]`.

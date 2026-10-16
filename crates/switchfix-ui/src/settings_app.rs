@@ -15,6 +15,8 @@ use tracing::info;
 pub struct SettingsApp {
     cfg: AppConfig,
     store: Box<dyn ConfigStore + Send + Sync>,
+    /// `~/.config/switchfix` — open in a file manager for hand edits.
+    config_dir: std::path::PathBuf,
     status: String,
     /// Which hotkey field is currently waiting for a key combination.
     capturing: Option<HotkeyField>,
@@ -64,6 +66,10 @@ pub enum Message {
     /// Toggle a modifier checkbox for one specific hotkey.
     SetMod(HotkeyField, ModKey, bool),
     Save,
+    /// Open `~/.config/switchfix/` (config.toml + maps/) in a file manager.
+    OpenConfigFolder,
+    /// Re-read config.toml into the form and signal the daemon to apply.
+    ReloadConfig,
     Close,
 }
 
@@ -79,6 +85,18 @@ fn write_capture_pause(on: bool) {
     } else {
         let _ = std::fs::remove_file(&path);
     }
+}
+
+fn reload_flag_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("switchfix.reload")
+}
+
+fn write_reload_flag() {
+    let token = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let _ = std::fs::write(reload_flag_path(), token.to_string());
 }
 
 fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
@@ -221,6 +239,46 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
                 app.status = format!("Ошибка: {e}");
             }
         },
+        Message::OpenConfigFolder => {
+            if !app.config_dir.exists() {
+                let _ = std::fs::create_dir_all(&app.config_dir);
+            }
+            match std::process::Command::new("xdg-open").arg(&app.config_dir).spawn() {
+                Ok(_) => {
+                    app.status = format!("Открыт каталог: {}", app.config_dir.display());
+                }
+                Err(e) => {
+                    app.status = format!(
+                        "Не удалось открыть файловый менеджер ({e}). Путь: {}",
+                        app.config_dir.display()
+                    );
+                }
+            }
+        }
+        Message::ReloadConfig => {
+            // Cancel capture so we don't clobber hotkey fields mid-edit.
+            if app.capturing.is_some() {
+                app.capturing = None;
+            }
+            if app.paused_for_capture {
+                write_capture_pause(false);
+                app.paused_for_capture = false;
+            }
+            match app.store.load() {
+                Ok(cfg) => {
+                    app.cfg = cfg;
+                    app.mods_selection = mods_from_combo(&app.cfg.hotkeys.convert_selection);
+                    app.mods_toggle = mods_from_combo(&app.cfg.hotkeys.toggle_enabled);
+                    write_reload_flag();
+                    app.status =
+                        "Конфигурация перезагружена. Хоткеи — после перезапуска демона.".into();
+                    info!("config reloaded from settings UI");
+                }
+                Err(ConfigError::Io(e)) | Err(ConfigError::Parse(e)) => {
+                    app.status = format!("Ошибка перезагрузки: {e}");
+                }
+            }
+        }
         Message::Close => {
             if app.paused_for_capture {
                 write_capture_pause(false);
@@ -671,12 +729,22 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
     ]
     .spacing(8);
 
-    let buttons = row![
-        button("Сохранить").on_press(Message::Save),
-        button("Закрыть").on_press(Message::Close),
+    let buttons = column![
+        row![
+            button("Сохранить").on_press(Message::Save),
+            button("Перезагрузить конфиг").on_press(Message::ReloadConfig),
+            button("Закрыть").on_press(Message::Close),
+        ]
+        .spacing(12),
+        row![
+            button("Редактировать конфиг").on_press(Message::OpenConfigFolder),
+            text("config.toml и maps/ — в открывшемся каталоге").size(12),
+        ]
+        .spacing(12)
+        .align_y(iced::Alignment::Center),
         text(&app.status).size(14),
     ]
-    .spacing(12);
+    .spacing(8);
 
     let content = column![general, hotkeys, privacy, spell, buttons]
         .spacing(24)
@@ -694,7 +762,10 @@ fn theme(_app: &SettingsApp) -> Theme {
 }
 
 /// Launch the settings window (blocking).
-pub fn run_settings(store: Box<dyn ConfigStore + Send + Sync>) -> iced::Result {
+pub fn run_settings(
+    store: Box<dyn ConfigStore + Send + Sync>,
+    config_dir: std::path::PathBuf,
+) -> iced::Result {
     // Hybrid-GPU + Wayland: the Vulkan surface can come up with an empty
     // present-mode list (dmabuf import failure on NVIDIA), which panics wgpu.
     // GL/Mesa is reliable on KDE Wayland — prefer it unless the user overrode.
@@ -708,6 +779,7 @@ pub fn run_settings(store: Box<dyn ConfigStore + Send + Sync>) -> iced::Result {
     let app = SettingsApp {
         cfg,
         store,
+        config_dir,
         status: String::new(),
         capturing: None,
         mods_selection,

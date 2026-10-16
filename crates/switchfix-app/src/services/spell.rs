@@ -53,7 +53,7 @@ pub struct SpellService {
     injector: Arc<dyn TextInjector>,
     presenter: Arc<dyn SuggestionPresenter>,
     buffer: Arc<dyn TypingBufferPort>,
-    tables: ConversionSet,
+    tables: std::sync::RwLock<ConversionSet>,
     config: watch::Receiver<AppConfig>,
     focus: Option<Arc<dyn FocusMonitor>>,
     enabled: AtomicBool,
@@ -91,13 +91,18 @@ impl SpellService {
             injector,
             presenter,
             buffer,
-            tables,
+            tables: std::sync::RwLock::new(tables),
             config,
             focus,
             enabled: AtomicBool::new(enabled),
             pending: Mutex::new(None),
             last_word: Mutex::new(None),
         }
+    }
+
+    /// Swap conversion tables at runtime (config reload).
+    pub fn replace_tables(&self, tables: ConversionSet) {
+        *self.tables.write().unwrap() = tables;
     }
 
     pub fn set_enabled(&self, on: bool) {
@@ -335,7 +340,11 @@ impl SpellService {
         }
 
         // Layout-convert candidate: `ghbdtn` → `привет` when that is a real word.
-        if let Ok(conv) = convert(word, &self.tables, None, None) {
+        let conv = {
+            let tables = self.tables.read().unwrap();
+            convert(word, &tables, None, None)
+        };
+        if let Ok(conv) = conv {
             let converted = conv.converted;
             if let Some(c_lang) = detect_lang(&converted) {
                 if self.spell.is_correct(&converted, c_lang) {

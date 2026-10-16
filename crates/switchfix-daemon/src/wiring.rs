@@ -3,14 +3,13 @@
 use std::sync::Arc;
 
 use switchfix_adapters::platform::{create_platform, BuildOptions, PlatformServices};
-use switchfix_adapters::{ensure_config, TomlConfigStore};
+use switchfix_adapters::{ensure_config, load_conversion_set, seed_default_maps, TomlConfigStore};
 use switchfix_app::config::AppConfig;
 use switchfix_app::ports::{ConfigStore, HotkeySource, TypingBufferPort};
 use switchfix_app::services::SpellService;
 use switchfix_app::CorrectionService;
-use switchfix_domain::ConversionSet;
 use tokio::sync::{mpsc, watch};
-use tracing::info;
+use tracing::{info, warn};
 
 /// Composition root handle. Extra fields are kept for settings reload / shutdown
 /// wiring and are part of the daemon API.
@@ -43,6 +42,10 @@ impl Default for WireOptions {
 pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
     let store = Arc::new(TomlConfigStore::open_default());
     let cfg = ensure_config(&store);
+    if let Err(e) = seed_default_maps() {
+        warn!("seed default maps failed: {e}");
+    }
+    let tables = load_conversion_set();
     let (config_tx, config_rx) = watch::channel(cfg.clone());
 
     let platform = create_platform();
@@ -85,7 +88,7 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
         layouts,
         notifier,
         focus.clone(),
-        ConversionSet::en_ru(),
+        tables.clone(),
         config_rx.clone(),
         cfg.general.enabled_on_start,
     ));
@@ -96,7 +99,7 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
             injector,
             suggestions,
             buffer.clone(),
-            ConversionSet::en_ru(),
+            tables,
             config_rx.clone(),
             focus,
             cfg.general.enabled_on_start,

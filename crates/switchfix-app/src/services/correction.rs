@@ -26,7 +26,7 @@ pub struct CorrectionService {
     layouts: Arc<dyn LayoutSwitcher>,
     notifier: Arc<dyn Notifier>,
     focus: Option<Arc<dyn FocusMonitor>>,
-    tables: ConversionSet,
+    tables: std::sync::RwLock<ConversionSet>,
     config: watch::Receiver<AppConfig>,
     enabled: AtomicBool,
     state_tx: watch::Sender<CorrectionState>,
@@ -80,11 +80,16 @@ impl CorrectionService {
             layouts,
             notifier,
             focus,
-            tables,
+            tables: std::sync::RwLock::new(tables),
             config,
             enabled: AtomicBool::new(enabled),
             state_tx,
         }
+    }
+
+    /// Swap conversion tables at runtime (config reload).
+    pub fn replace_tables(&self, tables: ConversionSet) {
+        *self.tables.write().unwrap() = tables;
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -224,7 +229,11 @@ impl CorrectionService {
             _ => return CorrectionOutcome::NoInputFound,
         };
 
-        let converted = match convert(&text, &self.tables, None, None) {
+        let converted = {
+            let tables = self.tables.read().unwrap();
+            convert(&text, &tables, None, None)
+        };
+        let converted = match converted {
             Ok(c) => c,
             Err(e) => {
                 debug!("convert terminal: {e}");
@@ -272,7 +281,11 @@ impl CorrectionService {
         let cfg = self.cfg();
         let CapturedSelection { text: selected, saved } = captured;
 
-        let converted = match convert(&selected, &self.tables, None, None) {
+        let converted = {
+            let tables = self.tables.read().unwrap();
+            convert(&selected, &tables, None, None)
+        };
+        let converted = match converted {
             Ok(c) => c,
             Err(e) => {
                 debug!("convert selection: {e}");
@@ -629,6 +642,23 @@ mod tests {
         assert!(clog.iter().any(|l| l == "put:привет"), "clog={clog:?}");
         // Clipboard must be restored after paste (plan §6).
         assert!(clog.iter().any(|l| l == "restore"), "clog={clog:?}");
+    }
+
+    #[tokio::test]
+    async fn replace_tables_changes_conversion() {
+        use std::collections::HashMap;
+        use switchfix_domain::{ConversionTable, LayoutId};
+
+        let (svc, _inj, clip, _b) = service(Some("q".into()), None, false, true);
+        let mut map = HashMap::new();
+        map.insert('q', 'Z');
+        let forward = ConversionTable::new(LayoutId::new("us"), LayoutId::new("ru"), map);
+        svc.replace_tables(ConversionSet::new(vec![forward.clone(), forward.reverse()]));
+
+        let out = svc.handle(CorrectionRequest::ConvertSelection).await;
+        assert!(out.is_success(), "{out:?}");
+        let clog = clip.log.lock().unwrap().clone();
+        assert!(clog.iter().any(|l| l == "put:Z"), "replaced map: {clog:?}");
     }
 
     #[tokio::test]
