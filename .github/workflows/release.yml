@@ -1,0 +1,303 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.toml"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build and publish even if tag for current version already exists
+        type: boolean
+        default: true
+      build_only:
+        description: Run builds only (skip Release / apt-repo publish)
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      should_release: ${{ steps.meta.outputs.should_release }}
+      build_only: ${{ steps.meta.outputs.build_only }}
+      force_release: ${{ steps.meta.outputs.force_release }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from Cargo.toml
+        id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_FORCE: ${{ inputs.force }}
+          INPUT_BUILD_ONLY: ${{ inputs.build_only }}
+        run: |
+          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_BUILD_ONLY" = "true" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "build_only=true" >> "$GITHUB_OUTPUT"
+            echo "Manual build-only run for ${TAG} (no publish)."
+            exit 0
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_FORCE" = "true" ]; then
+              echo "should_release=true" >> "$GITHUB_OUTPUT"
+              echo "force_release=true" >> "$GITHUB_OUTPUT"
+              echo "Tag ${TAG} exists — force manual release."
+            else
+              echo "should_release=false" >> "$GITHUB_OUTPUT"
+              echo "Tag ${TAG} already exists — skipping release."
+            fi
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "Will release ${TAG}."
+          fi
+
+  test:
+    needs: [version]
+    if: needs.version.outputs.should_release == 'true'
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: [version, test]
+    if: needs.version.outputs.should_release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            deb_arch: amd64
+          - os: ubuntu-22.04-arm
+            deb_arch: arm64
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            pkg-config libdbus-1-dev \
+            libxkbcommon-dev libwayland-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libgl1-mesa-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.deb_arch }}
+
+      - name: Build binary
+        run: cargo build --release
+
+      - name: Sanity check binary
+        run: |
+          ./target/release/switchfix --help
+          ./target/release/switchfix convert --text 'ghbdtn'
+
+      - name: Build .deb
+        run: ./packaging/build-deb.sh "${{ needs.version.outputs.version }}" "${{ matrix.deb_arch }}" dist
+
+      - name: Build tar.gz
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          DEB_ARCH: ${{ matrix.deb_arch }}
+        run: |
+          STAGE="dist/switchfix-${VERSION}-linux-${DEB_ARCH}"
+          mkdir -p "$STAGE/maps"
+          cp target/release/switchfix "$STAGE/"
+          cp packaging/desktop/switchfix.desktop "$STAGE/"
+          cp assets/maps/en2ru.json assets/maps/ru2en.json "$STAGE/maps/"
+          cat > "$STAGE/README.md" <<'EOF'
+          # switchfix
+
+          Fix text typed in the wrong keyboard layout (EN↔RU) — Linux/KDE tray utility.
+
+          ```
+          switchfix daemon     # tray + hotkeys + corrections (default)
+          switchfix settings   # settings window
+          switchfix doctor     # diagnostics
+          switchfix setup      # group 'input' + udev rule
+          switchfix selftest   # inject ctrl+f20 via uinput, verify evdev intercept
+          ```
+
+          Needs membership in group `input` for global hotkeys / uinput.
+          Prefer the .deb package when possible (installs maps, desktop file,
+          systemd user unit and udev rule).
+          EOF
+          tar -C dist -czf "dist/switchfix_${VERSION}_linux_${DEB_ARCH}.tar.gz" \
+            "switchfix-${VERSION}-linux-${DEB_ARCH}"
+          rm -rf "$STAGE"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.deb_arch }}
+          path: |
+            dist/*.deb
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: [version, build]
+    if: needs.version.outputs.should_release == 'true' && needs.version.outputs.build_only != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          find . -maxdepth 1 -type f \( -name '*.deb' -o -name '*.tar.gz' \) \
+            -printf '%f\n' | sort | xargs -r sha256sum > SHA256SUMS
+          cat SHA256SUMS
+          ls switchfix_*.deb >/dev/null
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+          FORCE: ${{ needs.version.outputs.force_release }}
+        run: |
+          if [ "$FORCE" = "true" ]; then
+            gh release delete "${TAG}" --yes || true
+            git push origin ":refs/tags/${TAG}" 2>/dev/null || true
+          fi
+          gh release create "${TAG}" \
+            --target "${GITHUB_SHA}" \
+            --title "${TAG}" \
+            --generate-notes \
+            dist/*.deb dist/*.tar.gz dist/SHA256SUMS
+
+  apt-repo:
+    needs: [version, build]
+    if: needs.version.outputs.should_release == 'true' && needs.version.outputs.build_only != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: gh-pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Materialize site
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # keep accumulated pool/ and downloads/ from previous gh-pages
+          git clone --depth 1 --branch gh-pages \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" site \
+            || (mkdir -p site && git -C site init && git -C site checkout --orphan gh-pages)
+          mkdir -p site/pool site/downloads
+          cp dist/*.deb site/pool/ 2>/dev/null || true
+          cp dist/*.tar.gz site/downloads/ 2>/dev/null || true
+          # static site source lives in pages/ (index.html + style.css)
+          cp pages/index.html pages/style.css site/
+
+          OWNER="${GITHUB_REPOSITORY%%/*}"
+          REPO="${GITHUB_REPOSITORY#*/}"
+          PAGES_BASE="https://${OWNER}.github.io/${REPO}"
+          sed -i \
+            -e "s|__PAGES_BASE__|${PAGES_BASE}|g" \
+            -e "s|__GITHUB_REPOSITORY__|${GITHUB_REPOSITORY}|g" \
+            site/index.html
+
+      - name: Regenerate apt index and package list
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dpkg-dev
+          cd site
+          dpkg-scanpackages --multiversion pool /dev/null > Packages
+          gzip -9c Packages > Packages.gz
+          printf '%s\n' \
+            'Origin: SwitchFix' \
+            'Label: SwitchFix' \
+            'Architectures: amd64 arm64' \
+            'Description: SwitchFix apt repository' \
+            'Suite: stable' \
+            'Codename: stable' \
+            > Release
+          {
+            echo '<ul class="packages">'
+            for f in pool/switchfix_*.deb; do
+              [ -e "$f" ] || continue
+              base=$(basename "$f")
+              arch=$(echo "$base" | sed -n 's/^.*_\(amd64\|arm64\)\.deb$/\1/p')
+              size=$(du -h "$f" | cut -f1)
+              printf '<li><a class="name" href="%s">%s</a><span class="meta">%s · %s</span></li>\n' \
+                "$f" "$base" "deb $arch" "$size"
+            done
+            for f in downloads/switchfix_*; do
+              [ -e "$f" ] || continue
+              base=$(basename "$f")
+              size=$(du -h "$f" | cut -f1)
+              case "$base" in
+                *linux_amd64*) plat="linux x64" ;;
+                *linux_arm64*) plat="linux arm64" ;;
+                *) plat="archive" ;;
+              esac
+              printf '<li><a class="name" href="%s">%s</a><span class="meta">%s · %s</span></li>\n' \
+                "$f" "$base" "$plat" "$size"
+            done
+            echo '</ul>'
+          } > /tmp/packages.html
+          python3 - <<'PY'
+          from pathlib import Path
+          html = Path("index.html").read_text()
+          pkgs = Path("/tmp/packages.html").read_text()
+          if "<!-- PACKAGES -->" in html:
+              html = html.replace("<!-- PACKAGES -->", pkgs)
+          Path("index.html").write_text(html)
+          PY
+
+      - name: Push gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cd site
+          git add -A
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "apt: add switchfix ${VERSION}" --allow-empty
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:gh-pages

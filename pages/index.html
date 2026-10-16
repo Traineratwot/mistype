@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SwitchFix — apt repository</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="wrap">
+    <header>
+      <h1>SwitchFix</h1>
+      <p class="tagline">Fix text typed in the wrong keyboard layout (EN↔RU) — Linux/KDE answer to Punto Switcher.</p>
+    </header>
+
+    <section class="intro">
+      <h2>Install (Debian / Ubuntu / Kubuntu)</h2>
+      <pre><code>echo "deb [trusted=yes] __PAGES_BASE__ ./" \
+  | sudo tee /etc/apt/sources.list.d/switchfix.list
+sudo apt update
+sudo apt install switchfix</code></pre>
+      <p class="muted">Or download the <code>.deb</code> below and run
+        <code>sudo apt install ./switchfix_*.deb</code>.</p>
+    </section>
+
+    <section>
+      <h2>After install</h2>
+      <pre><code>switchfix setup      # group 'input' + udev rule (prompts for sudo only when needed)
+switchfix doctor     # diagnostics: platform, hotkeys, D-Bus, sound
+switchfix selftest   # inject ctrl+f20 via uinput, verify evdev intercept</code></pre>
+      <p class="muted">Enable the tray daemon when ready (not enabled automatically):</p>
+      <pre><code>systemctl --user enable --now switchfix</code></pre>
+      <p class="muted">Global hotkeys need group <code>input</code>. Run
+        <code>switchfix setup</code> or <code>sudo usermod -aG input $USER</code>
+        and re-login. Hotkeys are configured in
+        <code>~/.config/switchfix/config.toml</code> — restart the daemon after changes.</p>
+    </section>
+
+    <section>
+      <h2>Packages (apt)</h2>
+      <!-- PACKAGES -->
+    </section>
+
+    <section>
+      <p class="muted">Source, issues and checksums are on
+        <a href="https://github.com/__GITHUB_REPOSITORY__">GitHub</a> ·
+        downloads and release notes on
+        <a href="https://github.com/__GITHUB_REPOSITORY__/releases">Releases</a>.</p>
+      <p class="muted">Privacy: no network, no keylogging persistence. The keystroke buffer is
+        RAM-only and optional. See <code>/usr/share/doc/switchfix/PRIVACY.md</code>.</p>
+    </section>
+
+    <footer>
+      <a href="https://github.com/__GITHUB_REPOSITORY__">github.com/__GITHUB_REPOSITORY__</a>
+    </footer>
+  </main>
+</body>
+</html>
