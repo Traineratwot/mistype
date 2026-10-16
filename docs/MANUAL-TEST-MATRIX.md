@@ -31,6 +31,15 @@ systemctl --user start switchfix
 | M12 | Add a 3rd layout (UA) in System Settings | EN↔RU conversion still works; UA text left alone | | | | | |
 | M13 | User **not** in `input` group | `switchfix doctor` fails with hint; settings + tray still start | | | | | |
 | M14 | Clipboard holds an image, convert selection | Text conversion works; image clipboard is **not** restored (documented) | | | | | |
+| M15 | Type `ghbdtn` + space (mode `hint`) | Suggestion bar: `1. привет (раскладка)` | | | | | |
+| M16 | Type `приветт` + space (mode `hint`) | Suggestion bar: `1. привет` | | | | | |
+| M17 | **Ctrl+1** while bar visible | Word replaced, bar hides, short sound plays | | | | | |
+| M18 | Click a candidate in the bar | Same as Ctrl+1 | | | | | |
+| M19 | **Ctrl+F2** (mode `hotkey` or `hint`) | Top-1 applied without waiting for the bar; flash + sound | | | | | |
+| M20 | Type `при` (completion on) | Bar shows completions (`привет`, …) | | | | | |
+| M21 | **Ctrl+0** / «+в словарь» | Word written to `user.dic`, never flagged again | | | | | |
+| M22 | `spell.mode = "auto"`, type `приветт` + space | Silently replaced with `привет` + sound; uncertain cases still show the bar | | | | | |
+| M23 | Bar hidden, press **Ctrl+1** | Reaches the app (accept chords not consumed) | | | | | |
 
 ## Extra checks
 
@@ -38,6 +47,9 @@ systemctl --user start switchfix
 |---|----------|-------------|
 | E1 | `switchfix convert --text 'ghbdtn'` | Prints `привет`, no injection |
 | E2 | `switchfix convert` with stdin `руддщ` | Prints `hello` |
+| E3 | `switchfix spell --text 'приветт'` | `misspelled` + `1. привет` |
+| E4 | `switchfix spell --text 'ghbdtn'` | `1. привет (раскладка)` |
+| E5 | `switchfix spell --text 'привет'` | `correct ✓` |
 | E3 | Save clipboard text → convert selection → paste | Original clipboard content is back |
 | E4 | Kill daemon mid-conversion | No stuck keys; restart recovers |
 | E5 | `journalctl --user -u switchfix -f` | No typed text in logs (default config) |

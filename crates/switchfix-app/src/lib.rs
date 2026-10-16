@@ -8,4 +8,4 @@ pub mod services;
 pub use config::{AppConfig, ConfigInvalid};
 pub use hotkey::HotkeyBinding;
 pub use ports::*;
-pub use services::CorrectionService;
+pub use services::{CorrectionService, SpellAction, SpellService};

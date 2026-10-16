@@ -9,18 +9,19 @@ stubs behind a platform layer (groundwork for the future).
 
 ---
 
-## Status (MVP)
+## Status (MVP + Phase 2)
 
 | Layer | Crate | Status |
 |-------|-------|--------|
-| Domain (conversion, buffer, state) | `switchfix-domain` | ✅ tests green |
+| Domain (conversion, buffer, state, spell heuristics) | `switchfix-domain` | ✅ tests green |
 | Use-cases + ports | `switchfix-app` | ✅ tests green (fakes) |
 | Platform layer + OS adapters | `switchfix-adapters` | ✅ tests green |
-| Tray + settings GUI | `switchfix-ui` | ✅ compiles, flash/sound feedback works |
-| CLI / daemon / doctor / selftest | `switchfix-daemon` | ✅ works on live KDE |
+| Tray + settings GUI + suggestion bar | `switchfix-ui` | ✅ compiles, flash/sound + bar |
+| CLI / daemon / doctor / selftest / spell | `switchfix-daemon` | ✅ works on live KDE |
 
-**Tests: 87 green** (+ 1 ignored live KDE D-Bus test). Verified live:
-hotkey intercept (evdev), layout switch (zbus), convert, tray flash + sound.
+**Tests: 119 green** (+ 1 ignored live KDE D-Bus test). Verified live:
+hotkey intercept (evdev), layout switch (zbus), convert, tray flash + sound,
+spellcheck CLI (zspell RU/EN + layout-convert candidates).
 
 ---
 
@@ -28,12 +29,14 @@ hotkey intercept (evdev), layout switch (zbus), convert, tray flash + sound.
 
 ```bash
 cargo build --release
-cargo test --workspace          # must stay green (87)
+cargo test --workspace          # must stay green (119)
 
-./target/release/switchfix doctor     # diagnostics incl. platform + hotkey bindings
+./target/release/switchfix doctor     # diagnostics incl. platform + hotkeys + dictionaries
 ./target/release/switchfix selftest   # injects ctrl+f20 via uinput, verifies evdev sees it
 ./target/release/switchfix beep       # play hotkey feedback sound
 ./target/release/switchfix convert --text 'ghbdtn'   # → привет
+./target/release/switchfix spell --text 'приветт'    # → 1. привет
+./target/release/switchfix spell --text 'ghbdtn'     # → 1. привет (раскладка)
 
 # live KDE D-Bus smoke (ignored by default):
 cargo test -p switchfix-adapters -- --ignored
@@ -57,7 +60,11 @@ sg input -c './target/release/switchfix daemon'
 | Action | Default key |
 |--------|-------------|
 | Convert selection | `ctrl+f1` |
+| Fix spelling of last word | `ctrl+f2` |
 | Toggle enabled | `ctrl+pause` |
+| Accept suggestion slot (while bar visible) | `ctrl+1/2/3` |
+| Add word to dictionary (while bar visible) | `ctrl+0` |
+| Dismiss suggestion bar | `ctrl+period` |
 
 The live config may differ (e.g. `insert`) — always check `switchfix doctor`.
 Click-to-capture in Settings UI; Esc cancels. After config change: **restart daemon**.
@@ -186,6 +193,8 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 | **`switchfix.capture-pause`** | Settings capture must not trigger real hotkeys | Daemon drains the hotkey queue while the file exists. Remove on capture end/exit. |
 | **Empty hotkey = disabled** | Esc in Settings clears the binding | `validate()` accepts `""`; `parse_hotkey_bindings` skips empty. |
 | **`HotkeySource::events()` is `take()`** | Second call returns an empty channel | Call once in the daemon loop. Never during `build_services`. |
+| **Accept chords `Ctrl+1/2/3`** | Would steal app shortcuts if always on | evdev matches them **only while** `bar_visible` is true. |
+| **Suggestion bar vs ksni** | Two iced/winit loops in one process clash | Bar is `switchfix suggest-bar` — separate process, file IPC (`switchfix.suggest.json` / `.cmd`). |
 | **`key_name_to_code` returns `evdev::KeyCode`** | Linux type leak | Keep it private to `platform/linux`. |
 | **SharedTypingBuffer ≠ domain `TypingBuffer`** | Duplicate concepts | Live one is adapters `SharedTypingBuffer`. Do not merge casually; `EvdevOptions.buffer` needs concrete type (`push`/`pop`). |
 | **wl-clipboard-rs** | Was a dead dep (arboard is used) | Removed. `wl-copy`/`wl-paste` are invoked as CLI when present; arboard is the library fallback. |
@@ -201,10 +210,12 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 
 | Command | Purpose |
 |---------|---------|
-| `daemon` (default) | Tray + hotkeys + corrections |
+| `daemon` (default) | Tray + hotkeys + corrections + spellcheck |
 | `settings` | iced settings window (separate process) |
 | `convert [--text]` | Pure domain convert (no injection) |
-| `doctor` | Diagnostics: platform, groups, uinput, D-Bus, **hotkey bindings**, sound |
+| `spell [--text]` | Spellcheck a word; prints candidates (layout-convert + dict) |
+| `suggest-bar` | Floating suggestion strip (spawned by daemon) |
+| `doctor` | Diagnostics: platform, groups, uinput, D-Bus, **hotkeys**, sound, **dictionaries** |
 | `setup [-y]` | Interactive privileged setup (sudo only for root steps) |
 | `toggle` | Flip enabled/paused via temp state file |
 | `beep` | Play hotkey feedback sound |
@@ -217,7 +228,7 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 `AppConfig` in `switchfix-app/src/config.rs` (`Default` + `validate()`):
 
 - `general.enabled_on_start`, `language`
-- `hotkeys.convert_selection / toggle_enabled`
+- `hotkeys.convert_selection / toggle_enabled / fix_spelling`
   — grammar `ctrl+shift+f1`, `insert`, `capslock`, `home`, … (`HotkeyBinding::parse`)
   — **empty string = action disabled** (Esc in Settings resets the field)
 - `hotkeys.hotkey_consume` (default **true**) — EVIOCGRAB + passthrough
@@ -228,6 +239,10 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 - `behavior.disable_in_fullscreen` (default **true**) — skip games / fullscreen video
 - `privacy.typing_buffer`, `privacy.typing_buffer_max_keys`
 - `layouts.active` — KDE short ids `["us","ru"]`
+- `spell.enabled`, `spell.mode` (`off|hint|hotkey|auto`)
+- `spell.languages` (`["ru","en"]`), `spell.min_word_len`, `spell.completion_min_chars`
+- `spell.suggest_count`, `spell.bar_position`, `spell.bar_timeout_ms`
+- `spell.auto_fix_min_len`, `spell.sound` (short signal on word replace)
 
 Settings UI: click field → press combo → saved; Esc **clears** the binding;
 checkboxes Ctrl/Alt/Shift/Meta force modifiers; while capturing a
@@ -239,16 +254,16 @@ checkboxes Ctrl/Alt/Shift/Meta force modifiers; while capturing a
 
 | Kind | Where | Notes |
 |------|-------|-------|
-| Domain unit | `switchfix-domain` | conversion, buffer, maps |
-| App unit | `switchfix-app` | hotkey parse, config validate, correction (inline fakes) |
-| Adapter unit | `switchfix-adapters` | config_store tempfile, detect/factory, parse_hotkey_bindings |
-| Integration order | `switchfix-tests/tests/scenarios.rs` | 11 order-sensitive scenarios + shared event-log fakes |
+| Domain unit | `switchfix-domain` | conversion, buffer, maps, spell heuristics |
+| App unit | `switchfix-app` | hotkey parse, config validate, correction, **spell service** (inline fakes) |
+| Adapter unit | `switchfix-adapters` | config_store tempfile, detect/factory, parse_hotkey_bindings, **zspell** |
+| Integration order | `switchfix-tests/tests/scenarios.rs` | 10 order-sensitive scenarios + shared event-log fakes |
 | UI unit | `switchfix-ui` | combo formatting |
 | Live (ignored) | `kde/layout.rs` | `live_kde_layout_roundtrip` |
 | Live CLI | `switchfix selftest` | uinput inject → evdev match |
 
-**Manual matrix:** `docs/MANUAL-TEST-MATRIX.md` (M1–M14) on Kate / Firefox /
-Konsole / Telegram / VS Code. Include hotkey consume leak-check.
+**Manual matrix:** `docs/MANUAL-TEST-MATRIX.md` (M1–M22) on Kate / Firefox /
+Konsole / Telegram / VS Code. Include hotkey consume leak-check and spell bar.
 
 **Simulating keys (for intercept tests):**
 ```bash
@@ -295,7 +310,13 @@ A: Hybrid GPU + Wayland wgpu panic. We force `WGPU_BACKEND=gl`. Don't remove.
 **Q: I changed a hotkey in Settings but it still uses the old one.**  
 A: MVP reads bindings at daemon start. **Restart the daemon.**
 
-**Q: Why `ctrl+f1` doesn't trigger but `insert` does?**  
+**Q: Spellcheck does nothing / no bar.**  
+A: (1) `switchfix doctor` → `spell dictionaries` must show `loaded [ru, en]`.
+If FAIL: `sudo apt install hunspell-ru hunspell-en-us`. (2) `spell.mode` must not
+be `off`. (3) `switchfix spell --text 'приветт'` proves the dictionary path.
+(4) Bar is a separate process — `pgrep -af suggest-bar`.
+
+**Q: `ctrl+f1` doesn't trigger but `insert` does.**  
 A: Your `config.toml` has `convert_selection = "insert"`. `doctor` prints the
 live bindings. Defaults ≠ current config.
 

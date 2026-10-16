@@ -6,6 +6,7 @@ use switchfix_adapters::platform::{create_platform, BuildOptions, PlatformServic
 use switchfix_adapters::{ensure_config, TomlConfigStore};
 use switchfix_app::config::AppConfig;
 use switchfix_app::ports::{ConfigStore, HotkeySource, TypingBufferPort};
+use switchfix_app::services::SpellService;
 use switchfix_app::CorrectionService;
 use switchfix_domain::ConversionSet;
 use tokio::sync::{mpsc, watch};
@@ -16,6 +17,7 @@ use tracing::info;
 #[allow(dead_code)]
 pub struct AppContext {
     pub service: Arc<CorrectionService>,
+    pub spell: Option<Arc<SpellService>>,
     pub config_tx: watch::Sender<AppConfig>,
     pub config_rx: watch::Receiver<AppConfig>,
     pub buffer: Arc<dyn TypingBufferPort>,
@@ -71,25 +73,46 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
         config,
         notifier,
         focus,
+        spell,
+        suggestions,
     } = services;
 
     let service = Arc::new(CorrectionService::with_focus(
-        injector,
+        injector.clone(),
         clipboard,
         selection,
         buffer.clone() as Arc<dyn TypingBufferPort>,
         layouts,
         notifier,
-        focus,
+        focus.clone(),
         ConversionSet::en_ru(),
         config_rx.clone(),
         cfg.general.enabled_on_start,
     ));
 
+    let spell_svc = spell.map(|checker| {
+        Arc::new(SpellService::with_focus(
+            checker,
+            injector,
+            suggestions,
+            buffer.clone(),
+            ConversionSet::en_ru(),
+            config_rx.clone(),
+            focus,
+            cfg.general.enabled_on_start,
+        ))
+    });
+    if spell_svc.is_some() {
+        info!("spellcheck wired (mode={})", cfg.spell.mode);
+    } else {
+        info!("spellcheck unavailable (no dictionaries or disabled)");
+    }
+
     info!("SwitchFix wired up");
 
     Ok(AppContext {
         service,
+        spell: spell_svc,
         config_tx,
         config_rx,
         buffer,

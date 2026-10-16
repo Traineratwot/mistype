@@ -4,8 +4,9 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use switchfix_app::ports::TypingBufferPort;
+use switchfix_app::ports::{TypingBufferPort, WordEvent};
 use switchfix_domain::WordSpan;
+use tokio::sync::broadcast;
 
 /// Shared keystroke buffer (RAM only).
 #[derive(Debug)]
@@ -13,14 +14,17 @@ pub struct SharedTypingBuffer {
     chars: Mutex<VecDeque<char>>,
     max: usize,
     enabled: AtomicBool,
+    word_tx: broadcast::Sender<WordEvent>,
 }
 
 impl SharedTypingBuffer {
     pub fn new(max: usize, enabled: bool) -> Arc<Self> {
+        let (word_tx, _) = broadcast::channel(64);
         Arc::new(Self {
             chars: Mutex::new(VecDeque::with_capacity(max.min(256))),
             max: max.max(1),
             enabled: AtomicBool::new(enabled),
+            word_tx,
         })
     }
 
@@ -33,6 +37,21 @@ impl SharedTypingBuffer {
             g.pop_front();
         }
         g.push_back(c);
+
+        if Self::is_sep(c) {
+            // Word just finished — emit Completed with the word before the separator.
+            let word = Self::peek_word_locked(&g, true);
+            if let Some(text) = word {
+                let char_len = text.chars().count();
+                let _ = self.word_tx.send(WordEvent::Completed {
+                    word: WordSpan { text, char_len },
+                    separator: c,
+                });
+            }
+        } else {
+            let frag = Self::peek_word_locked(&g, false).unwrap_or_default();
+            let _ = self.word_tx.send(WordEvent::Updated(frag));
+        }
     }
 
     pub fn pop(&self) {
@@ -62,6 +81,36 @@ impl SharedTypingBuffer {
                     | '/'
                     | '\\'
             )
+    }
+
+    /// Last non-separator run. When `drop_trailing_sep` is set, the just-typed
+    /// separator is ignored so we can recover the word that ended.
+    fn peek_word_locked(g: &VecDeque<char>, drop_trailing_sep: bool) -> Option<String> {
+        let mut end = g.len();
+        if drop_trailing_sep {
+            while end > 0 && Self::is_sep(g[end - 1]) {
+                end -= 1;
+            }
+        }
+        if end == 0 {
+            return None;
+        }
+        let mut start = end;
+        while start > 0 && !Self::is_sep(g[start - 1]) {
+            start -= 1;
+        }
+        if start >= end {
+            return None;
+        }
+        Some(g.range(start..end).collect())
+    }
+
+    pub fn peek_current_word(&self) -> Option<String> {
+        if !self.enabled.load(Ordering::SeqCst) {
+            return None;
+        }
+        let g = self.chars.lock().unwrap();
+        Self::peek_word_locked(&g, false)
     }
 
     pub fn take_last_word(&self) -> Option<WordSpan> {
@@ -111,5 +160,59 @@ impl TypingBufferPort for SharedTypingBuffer {
     }
     fn backspace(&self) {
         self.pop();
+    }
+    fn peek_current_word(&self) -> Option<String> {
+        SharedTypingBuffer::peek_current_word(self)
+    }
+    fn word_events(&self) -> broadcast::Receiver<WordEvent> {
+        self.word_tx.subscribe()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn emits_completed_on_separator() {
+        let b = SharedTypingBuffer::new(64, true);
+        let mut rx = b.word_events();
+        for c in "helo ".chars() {
+            b.push(c);
+        }
+        let mut got = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let WordEvent::Completed { word, separator } = ev {
+                got = Some((word, separator));
+            }
+        }
+        let (word, sep) = got.unwrap();
+        assert_eq!(word.text, "helo");
+        assert_eq!(sep, ' ');
+    }
+
+    #[tokio::test]
+    async fn emits_updated_while_typing() {
+        let b = SharedTypingBuffer::new(64, true);
+        let mut rx = b.word_events();
+        for c in "прив".chars() {
+            b.push(c);
+        }
+        let mut last = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let WordEvent::Updated(f) = ev {
+                last = Some(f);
+            }
+        }
+        assert_eq!(last.as_deref(), Some("прив"));
+    }
+
+    #[test]
+    fn peek_current_word_reads_fragment() {
+        let b = SharedTypingBuffer::new(64, true);
+        for c in "hello wor".chars() {
+            b.push(c);
+        }
+        assert_eq!(b.peek_current_word().as_deref(), Some("wor"));
     }
 }

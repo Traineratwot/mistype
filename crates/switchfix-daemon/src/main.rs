@@ -43,6 +43,14 @@ enum Command {
     Beep,
     /// Inject a synthetic hotkey (ctrl+f20) and verify evdev interception works.
     Selftest,
+    /// Check spelling of a word (or --text) and print suggestions.
+    Spell {
+        /// Word / text to check. If omitted, reads stdin.
+        #[arg(long)]
+        text: Option<String>,
+    },
+    /// Run the floating suggestion bar (spawned by the daemon).
+    SuggestBar,
 }
 
 #[tokio::main]
@@ -128,12 +136,113 @@ async fn main() -> anyhow::Result<()> {
             }
             println!("\nself-test OK — hotkey interception works");
         }
+        Command::Spell { text } => {
+            let input = match text {
+                Some(t) => t,
+                None => {
+                    use std::io::Read;
+                    let mut s = String::new();
+                    std::io::stdin().read_to_string(&mut s)?;
+                    s.trim_end_matches('\n').to_string()
+                }
+            };
+            run_spell_cli(&input);
+        }
+        Command::SuggestBar => {
+            switchfix_ui::run_suggest_bar()?;
+        }
         Command::Daemon => {
             run_daemon().await?;
         }
     }
 
     Ok(())
+}
+
+/// `switchfix spell --text …` — dictionary lookup without injection.
+fn run_spell_cli(input: &str) {
+    use switchfix_app::ports::SpellChecker;
+    use switchfix_domain::{detect_lang, rank, should_check, Suggestion, SuggestionKind};
+
+    let store = switchfix_adapters::TomlConfigStore::open_default();
+    let cfg = switchfix_adapters::ensure_config(&store);
+    let user_dic = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("switchfix")
+        .join("user.dic");
+    let dict = switchfix_adapters::ZspellDictionary::load(&cfg.spell.languages, user_dic);
+    if !dict.has_any() {
+        eprintln!("no spell dictionaries found (install hunspell-ru / hunspell-en-us)");
+        std::process::exit(2);
+    }
+
+    let word = input.trim();
+    if word.is_empty() {
+        eprintln!("empty input");
+        std::process::exit(2);
+    }
+
+    let Some(lang) = detect_lang(word) else {
+        println!("(no letters — nothing to check)");
+        return;
+    };
+    println!("word: {word}  lang: {lang}");
+
+    if !should_check(word, cfg.spell.min_word_len) {
+        println!("skipped (noise / too short / acronym)");
+        return;
+    }
+
+    if dict.is_correct(word, lang) {
+        println!("correct ✓");
+        return;
+    }
+    println!("misspelled ✗");
+
+    let mut candidates: Vec<Suggestion> = Vec::new();
+    if let Ok(conv) = switchfix_domain::convert(
+        word,
+        &switchfix_domain::ConversionSet::en_ru(),
+        None,
+        None,
+    ) {
+        if let Some(cl) = detect_lang(&conv.converted) {
+            if dict.is_correct(&conv.converted, cl) {
+                candidates.push(Suggestion::new(
+                    conv.converted,
+                    SuggestionKind::LayoutConvert,
+                    word,
+                ));
+            }
+        }
+    }
+    for c in dict.suggest(word, lang, 8) {
+        candidates.push(Suggestion::new(c, SuggestionKind::SpellFix, word));
+    }
+    // Obvious one-edit fixes the engine may have missed.
+    for cand in switchfix_domain::one_step_neighbors(word) {
+        if candidates.iter().any(|s| s.text == cand) {
+            continue;
+        }
+        if let Some(cl) = detect_lang(&cand) {
+            if dict.is_correct(&cand, cl) {
+                candidates.push(Suggestion::new(cand, SuggestionKind::SpellFix, word));
+            }
+        }
+    }
+    let ranked = rank(word, candidates);
+    if ranked.is_empty() {
+        println!("no suggestions");
+        return;
+    }
+    for (i, s) in ranked.iter().take(cfg.spell.suggest_count).enumerate() {
+        let kind = match s.kind {
+            SuggestionKind::LayoutConvert => " (раскладка)",
+            SuggestionKind::SpellFix => "",
+            SuggestionKind::Completion => " (дописывание)",
+        };
+        println!("{}. {}{kind}", i + 1, s.text);
+    }
 }
 
 async fn run_daemon() -> anyhow::Result<()> {
@@ -172,10 +281,44 @@ async fn run_daemon() -> anyhow::Result<()> {
     // Hotkey loop
     let mut events = ctx.hotkeys.events();
     let service = ctx.service.clone();
+    let spell = ctx.spell.clone();
+    let buffer = ctx.buffer.clone();
+
+    // Spell word-event loop: completions + auto-fix + hints as the user types.
+    let sound_cfg = ctx.config_rx.clone();
+    if let Some(spell_svc) = spell.clone() {
+        let mut word_rx = buffer.word_events();
+        tokio::spawn(async move {
+            while let Ok(ev) = word_rx.recv().await {
+                let action = spell_svc.on_word_event(ev).await;
+                if matches!(
+                    action,
+                    switchfix_app::services::SpellAction::Replaced { .. }
+                ) && sound_cfg.borrow().spell.sound
+                {
+                    switchfix_ui::play_fix_sound();
+                }
+            }
+        });
+    }
+
+    // Floating suggestion bar (separate process — iced vs ksni event-loop clash).
+    if spell.is_some() {
+        match std::process::Command::new(
+            std::env::current_exe().unwrap_or_else(|_| "switchfix".into()),
+        )
+        .arg("suggest-bar")
+        .spawn()
+        {
+            Ok(child) => info!("suggestion bar pid {}", child.id()),
+            Err(e) => warn!("suggestion bar failed to spawn: {e}"),
+        }
+    }
 
     // Also poll the toggle state file for `switchfix toggle`.
     let toggle_path = std::env::temp_dir().join("switchfix.enabled");
     let mut last_toggle = std::fs::read_to_string(&toggle_path).unwrap_or_else(|_| "1".into());
+    let suggest_cmd_path = switchfix_adapters::platform::portable::suggest_cmd_path();
 
     loop {
         tokio::select! {
@@ -192,15 +335,54 @@ async fn run_daemon() -> anyhow::Result<()> {
                         tray_handle.flash(switchfix_ui::FLASH_DURATION);
                         switchfix_ui::play_hotkey_sound();
 
-                        let req = match he {
-                            HotkeyEvent::ConvertSelection => Some(CorrectionRequest::ConvertSelection),
-                            HotkeyEvent::ToggleEnabled => None,
-                        };
-                        if he == HotkeyEvent::ToggleEnabled {
-                            service.toggle_enabled().await;
-                        } else if let Some(r) = req {
-                            let out = service.handle(r).await;
-                            info!("correction outcome: {out:?}");
+                        match he {
+                            HotkeyEvent::ConvertSelection => {
+                                let out = service.handle(CorrectionRequest::ConvertSelection).await;
+                                info!("correction outcome: {out:?}");
+                            }
+                            HotkeyEvent::ToggleEnabled => {
+                                service.toggle_enabled().await;
+                                if let Some(s) = &spell {
+                                    s.set_enabled(service.is_enabled());
+                                }
+                            }
+                            HotkeyEvent::FixSpelling => {
+                                if let Some(s) = &spell {
+                                    let action = s.fix_last_word().await;
+                                    info!("spell fix: {action:?}");
+                                    if matches!(
+                                        action,
+                                        switchfix_app::services::SpellAction::Replaced { .. }
+                                    ) && ctx.config_rx.borrow().spell.sound
+                                    {
+                                        switchfix_ui::play_fix_sound();
+                                    }
+                                }
+                            }
+                            HotkeyEvent::AcceptSuggestion(n) => {
+                                if let Some(s) = &spell {
+                                    let action = s.accept_slot(n).await;
+                                    info!("spell accept {n}: {action:?}");
+                                    if matches!(
+                                        action,
+                                        switchfix_app::services::SpellAction::Replaced { .. }
+                                    ) && ctx.config_rx.borrow().spell.sound
+                                    {
+                                        switchfix_ui::play_fix_sound();
+                                    }
+                                }
+                            }
+                            HotkeyEvent::AddToDictionary => {
+                                if let Some(s) = &spell {
+                                    let action = s.add_to_dictionary().await;
+                                    info!("spell learn: {action:?}");
+                                }
+                            }
+                            HotkeyEvent::DismissSuggestions => {
+                                if let Some(s) = &spell {
+                                    s.dismiss().await;
+                                }
+                            }
                         }
                     }
                     None => {
@@ -214,6 +396,9 @@ async fn run_daemon() -> anyhow::Result<()> {
                     if v != last_toggle {
                         last_toggle = v;
                         service.toggle_enabled().await;
+                        if let Some(s) = &spell {
+                            s.set_enabled(service.is_enabled());
+                        }
                     }
                 }
             }
@@ -225,6 +410,34 @@ async fn run_daemon() -> anyhow::Result<()> {
                 if capturing {
                     // Drain any queued hotkeys so they don't fire after capture.
                     while events.try_recv().is_ok() {}
+                }
+
+                // Suggestion-bar click commands (accept:N / add / dismiss).
+                if let Ok(cmd) = std::fs::read_to_string(&suggest_cmd_path) {
+                    let _ = std::fs::remove_file(&suggest_cmd_path);
+                    let cmd = cmd.trim().to_string();
+                    if let Some(s) = &spell {
+                        let action = if let Some(rest) = cmd.strip_prefix("accept:") {
+                            match rest.trim().parse::<u8>() {
+                                Ok(n) => s.accept_slot(n).await,
+                                Err(_) => switchfix_app::services::SpellAction::None,
+                            }
+                        } else if cmd == "add" {
+                            s.add_to_dictionary().await
+                        } else if cmd == "dismiss" {
+                            s.dismiss().await
+                        } else {
+                            switchfix_app::services::SpellAction::None
+                        };
+                        info!("suggest-bar cmd {cmd:?}: {action:?}");
+                        if matches!(
+                            action,
+                            switchfix_app::services::SpellAction::Replaced { .. }
+                        ) && ctx.config_rx.borrow().spell.sound
+                        {
+                            switchfix_ui::play_fix_sound();
+                        }
+                    }
                 }
             }
         }

@@ -65,6 +65,14 @@ pub enum NotifyError {
     Failed(String),
 }
 
+#[derive(Debug, Error)]
+pub enum SpellError {
+    #[error("dictionary unavailable: {0}")]
+    Unavailable(String),
+    #[error("spell failed: {0}")]
+    Failed(String),
+}
+
 // ---------- payloads ----------
 
 /// Text-only snapshot of the user clipboard (restore is best-effort).
@@ -93,6 +101,36 @@ pub enum NotifyLevel {
 pub enum HotkeyEvent {
     ConvertSelection,
     ToggleEnabled,
+    FixSpelling,
+    AcceptSuggestion(u8),
+    AddToDictionary,
+    DismissSuggestions,
+}
+
+/// A word boundary / fragment update from the typing buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WordEvent {
+    /// A word was finished (separator typed).
+    Completed {
+        word: WordSpan,
+        /// The separator character that ended the word (space, comma, …).
+        separator: char,
+    },
+    /// Characters were added — current in-progress fragment.
+    Updated(String),
+}
+
+/// Payload for the suggestion bar.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SuggestionUi {
+    /// Original word/fragment being replaced.
+    pub original: String,
+    /// Candidate slots, in display order (max `suggest_count`).
+    pub slots: Vec<switchfix_domain::Suggestion>,
+    /// Whether the "add to dictionary" action is offered.
+    pub can_add_to_dict: bool,
+    /// How long the bar stays up if the user does nothing.
+    pub timeout_ms: u64,
 }
 
 // ---------- ports ----------
@@ -127,6 +165,40 @@ pub trait TypingBufferPort: Send + Sync {
     fn is_enabled(&self) -> bool;
     fn push_char(&self, c: char);
     fn backspace(&self);
+    /// Current in-progress word (after the last separator), without consuming.
+    fn peek_current_word(&self) -> Option<String> {
+        None
+    }
+    /// Stream of word-boundary / fragment events.
+    fn word_events(&self) -> broadcast::Receiver<WordEvent> {
+        // A never-used channel; adapters that care override this.
+        let (tx, rx) = broadcast::channel(1);
+        drop(tx);
+        rx
+    }
+}
+
+/// Dictionary-backed spelling: check, suggest, learn.
+#[async_trait]
+pub trait SpellChecker: Send + Sync {
+    /// `true` if the word is spelled correctly (or no dictionary is loaded).
+    fn is_correct(&self, word: &str, lang: &str) -> bool;
+    /// Up to `n` spelling corrections for a misspelled word.
+    fn suggest(&self, word: &str, lang: &str, n: usize) -> Vec<String>;
+    /// Up to `n` dictionary words starting with `prefix` (word completion).
+    fn complete(&self, prefix: &str, lang: &str, n: usize) -> Vec<String>;
+    /// Persist `word` to the personal dictionary so it is never flagged again.
+    fn add_to_dictionary(&self, word: &str) -> Result<(), SpellError>;
+    /// Language ids that have a loaded dictionary (e.g. `["ru", "en"]`).
+    fn languages(&self) -> Vec<String>;
+}
+
+/// Floating suggestion bar (layer-shell strip on KDE Wayland).
+#[async_trait]
+pub trait SuggestionPresenter: Send + Sync {
+    async fn show(&self, model: SuggestionUi) -> Result<(), NotifyError>;
+    async fn hide(&self) -> Result<(), NotifyError>;
+    fn is_visible(&self) -> bool;
 }
 
 #[async_trait]

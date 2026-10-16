@@ -40,7 +40,7 @@ Tray-утилита для **Kubuntu (Debian + KDE Plasma 6, Wayland-only MVP)**
 
 ### Спеллинг (фаза 2)
 
-**Hunspell / Nuspell** (словари RU/EN) · LanguageTool (опц., тяжёлый) · aspell (legacy)
+**zspell** (pure Rust, Hunspell-формат) · системные словари `/usr/share/hunspell` · user.dic · one-step neighbors для очевидных опечаток · LanguageTool (опц., тяжёлый) · aspell (legacy)
 
 ### Выводы
 
@@ -64,7 +64,7 @@ Tray-утилита для **Kubuntu (Debian + KDE Plasma 6, Wayland-only MVP)**
 | Inject | **uinput** (`evdev` crate) | Ядерная vkeyboard, не блокируется Wayland | wtype/ydotool/XTest |
 | Clipboard | `wl-clipboard-rs` (+ `arboard`) | save/put/get/restore | — |
 | Конфиг | `serde`+`toml` `~/.config/switchfix/` | Человекочитаемо | KConfig |
-| Спеллинг (P2) | nuspell / hunspell FFI | Нативные словари | LanguageTool |
+| Спеллинг (P2) | **zspell** (pure Rust, hunspell-формат) | Без FFI, легко паковать | LanguageTool, hunspell FFI |
 | Упаковка | `.deb` + systemd user | Kubuntu-first | Flatpak (усложняет /dev) |
 
 **Паттерн процессов (снимает конфликт iced ↔ ksni):**
@@ -342,7 +342,7 @@ Idle → Capturing → Converting → Replacing → SwitchingLayout
 |------|-------|------|
 | **0 Spike** (1–2 дн.) | Подтвердить D-Bus `setLayout/getLayout`; uinput печатает в Kate; clipboard-marker читает selection; iced vs egui | Прототипы работают |
 | **1 MVP** (2–4 нед.) | domain EN↔RU, adapters, CorrectionService, tray, settings, CLI (`daemon\|settings\|convert\|doctor\|toggle`), .deb, tests | M1, M2, M6, M7 зелёные в 5 app |
-| **2 Spellcheck** | SpellPort + hunspell/nuspell, хоткей «исправить слово» | unit + manual |
+| **2 Spellcheck** | SpellPort + zspell, хоткей «исправить слово», полоса подсказок, completions, layout-convert candidates, user.dic, сигнал | unit + manual M15–M23 |
 | **3 Snippets** | SnippetStore, expand по триггеру (keystroke-буфер), `{date}`/`{time}` | expand tests |
 | **4 Auto mode** | AutoDetector по словарям; default **off**; privacy | opt-in |
 | **5 Другие DE** | X11 (XTest/setxkbmap), GNOME (portal, gsettings), AUR/.rpm/Flatpak | adapter matrix |
@@ -482,4 +482,16 @@ excluded_apps = ["keepassxc", "kwalletmanager5"]
 typing_buffer = true
 typing_buffer_max_keys = 256
 log_text_content = false
+
+[spell]
+enabled = true
+mode = "hint"                  # off | hint | hotkey | auto
+languages = ["ru", "en"]
+min_word_len = 3
+completion_min_chars = 3
+suggest_count = 3
+bar_position = "bottom"
+bar_timeout_ms = 4500
+auto_fix_min_len = 4
+sound = true
 ```

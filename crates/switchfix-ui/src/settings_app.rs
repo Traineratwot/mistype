@@ -53,6 +53,9 @@ pub enum Message {
     ToggleEnabled(bool),
     ToggleTypingBuffer(bool),
     ToggleHotkeyConsume(bool),
+    ToggleSpell(bool),
+    SpellMode(String),
+    ToggleSpellSound(bool),
     Language(String),
     StartCapture(HotkeyField),
     CancelCapture,
@@ -83,6 +86,9 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
         Message::ToggleEnabled(v) => app.cfg.general.enabled_on_start = v,
         Message::ToggleTypingBuffer(v) => app.cfg.privacy.typing_buffer = v,
         Message::ToggleHotkeyConsume(v) => app.cfg.hotkeys.hotkey_consume = v,
+        Message::ToggleSpell(v) => app.cfg.spell.enabled = v,
+        Message::SpellMode(m) => app.cfg.spell.mode = m,
+        Message::ToggleSpellSound(v) => app.cfg.spell.sound = v,
         Message::Language(s) => app.cfg.general.language = s,
         Message::StartCapture(field) => {
             if !app.paused_for_capture {
@@ -631,6 +637,40 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
     ]
     .spacing(8);
 
+    let spell_modes = [
+        ("hint", "Подсказки"),
+        ("hotkey", "Только хоткей"),
+        ("auto", "Авто-исправление"),
+        ("off", "Выкл."),
+    ];
+    let mut mode_row = row![].spacing(6);
+    for (id, label) in spell_modes {
+        let selected = cfg.spell.mode == id;
+        mode_row = mode_row.push(
+            button(text(label).size(12))
+                .padding(6)
+                .style(if selected {
+                    button::primary
+                } else {
+                    button::secondary
+                })
+                .on_press(Message::SpellMode(id.into())),
+        );
+    }
+
+    let spell = column![
+        text("Правописание").size(20),
+        checkbox("Проверять орфографию и подсказывать слова", cfg.spell.enabled)
+            .on_toggle(Message::ToggleSpell),
+        text("Режим").size(13),
+        mode_row,
+        checkbox("Короткий сигнал при исправлении", cfg.spell.sound)
+            .on_toggle(Message::ToggleSpellSound),
+        text("Принять подсказку: Ctrl+1/2/3 или клик · Ctrl+F2 — исправить слово · Ctrl+0 — в словарь")
+            .size(12),
+    ]
+    .spacing(8);
+
     let buttons = row![
         button("Сохранить").on_press(Message::Save),
         button("Закрыть").on_press(Message::Close),
@@ -638,7 +678,7 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
     ]
     .spacing(12);
 
-    let content = column![general, hotkeys, privacy, buttons]
+    let content = column![general, hotkeys, privacy, spell, buttons]
         .spacing(24)
         .padding(24)
         .width(Length::Fill);

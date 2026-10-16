@@ -30,6 +30,8 @@ pub struct AppConfig {
     pub behavior: Behavior,
     #[serde(default)]
     pub privacy: Privacy,
+    #[serde(default)]
+    pub spell: Spell,
 }
 
 impl Default for AppConfig {
@@ -40,6 +42,7 @@ impl Default for AppConfig {
             layouts: LayoutsCfg::default(),
             behavior: Behavior::default(),
             privacy: Privacy::default(),
+            spell: Spell::default(),
         }
     }
 }
@@ -79,6 +82,8 @@ pub struct Hotkeys {
     pub convert_selection: String,
     #[serde(default = "hk_toggle")]
     pub toggle_enabled: String,
+    #[serde(default = "hk_fix_spelling")]
+    pub fix_spelling: String,
     #[serde(default = "def_false")]
     pub use_portal_hotkeys: bool,
     /// Fully consume hotkeys (EVIOCGRAB): the bound key does not reach apps.
@@ -93,12 +98,16 @@ fn hk_sel() -> String {
 fn hk_toggle() -> String {
     "ctrl+pause".into()
 }
+fn hk_fix_spelling() -> String {
+    "ctrl+f2".into()
+}
 
 impl Default for Hotkeys {
     fn default() -> Self {
         Self {
             convert_selection: hk_sel(),
             toggle_enabled: hk_toggle(),
+            fix_spelling: hk_fix_spelling(),
             use_portal_hotkeys: false,
             hotkey_consume: true,
         }
@@ -225,6 +234,81 @@ impl Default for Privacy {
     }
 }
 
+/// Spellcheck + suggestion bar settings (Phase 2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Spell {
+    #[serde(default = "def_true")]
+    pub enabled: bool,
+    /// "off" | "hint" | "hotkey" | "auto"
+    #[serde(default = "def_spell_mode")]
+    pub mode: String,
+    /// Dictionary language ids to load, e.g. `["ru", "en"]`.
+    #[serde(default = "def_spell_langs")]
+    pub languages: Vec<String>,
+    /// Skip words shorter than this.
+    #[serde(default = "def_min_word_len")]
+    pub min_word_len: usize,
+    /// Start completions after this many typed characters.
+    #[serde(default = "def_completion_min_chars")]
+    pub completion_min_chars: usize,
+    /// How many candidate slots the bar shows.
+    #[serde(default = "def_suggest_count")]
+    pub suggest_count: usize,
+    /// "bottom" | "top"
+    #[serde(default = "def_bar_position")]
+    pub bar_position: String,
+    #[serde(default = "def_bar_timeout")]
+    pub bar_timeout_ms: u64,
+    /// Minimum word length for silent auto-replace.
+    #[serde(default = "def_auto_fix_min_len")]
+    pub auto_fix_min_len: usize,
+    /// Play a short sound when a word is replaced.
+    #[serde(default = "def_true")]
+    pub sound: bool,
+}
+
+fn def_spell_mode() -> String {
+    "hint".into()
+}
+fn def_spell_langs() -> Vec<String> {
+    vec!["ru".into(), "en".into()]
+}
+fn def_min_word_len() -> usize {
+    3
+}
+fn def_completion_min_chars() -> usize {
+    3
+}
+fn def_suggest_count() -> usize {
+    3
+}
+fn def_bar_position() -> String {
+    "bottom".into()
+}
+fn def_bar_timeout() -> u64 {
+    4500
+}
+fn def_auto_fix_min_len() -> usize {
+    4
+}
+
+impl Default for Spell {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            mode: def_spell_mode(),
+            languages: def_spell_langs(),
+            min_word_len: def_min_word_len(),
+            completion_min_chars: def_completion_min_chars(),
+            suggest_count: def_suggest_count(),
+            bar_position: def_bar_position(),
+            bar_timeout_ms: def_bar_timeout(),
+            auto_fix_min_len: def_auto_fix_min_len(),
+            sound: true,
+        }
+    }
+}
+
 /// Why a config value was rejected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigInvalid {
@@ -232,6 +316,9 @@ pub enum ConfigInvalid {
     LayoutIndex { value: String },
     SettleMs { field: String, value: u64 },
     EmptyLayouts,
+    SpellMode { value: String },
+    SpellBarPosition { value: String },
+    SpellSuggestCount { value: usize },
 }
 
 impl std::fmt::Display for ConfigInvalid {
@@ -247,6 +334,15 @@ impl std::fmt::Display for ConfigInvalid {
                 write!(f, "invalid {field}={value} (must be 0..=10000)")
             }
             ConfigInvalid::EmptyLayouts => write!(f, "layouts.active must not be empty"),
+            ConfigInvalid::SpellMode { value } => {
+                write!(f, "invalid spell.mode '{value}' (expected off|hint|hotkey|auto)")
+            }
+            ConfigInvalid::SpellBarPosition { value } => {
+                write!(f, "invalid spell.bar_position '{value}' (expected bottom|top)")
+            }
+            ConfigInvalid::SpellSuggestCount { value } => {
+                write!(f, "invalid spell.suggest_count {value} (must be 1..=5)")
+            }
         }
     }
 }
@@ -259,6 +355,7 @@ impl AppConfig {
         for (field, value) in [
             ("hotkeys.convert_selection", &self.hotkeys.convert_selection),
             ("hotkeys.toggle_enabled", &self.hotkeys.toggle_enabled),
+            ("hotkeys.fix_spelling", &self.hotkeys.fix_spelling),
         ] {
             // Empty = action disabled (Esc reset in the settings UI).
             if value.trim().is_empty() {
@@ -293,6 +390,22 @@ impl AppConfig {
             }
         }
 
+        if !matches!(self.spell.mode.as_str(), "off" | "hint" | "hotkey" | "auto") {
+            errs.push(ConfigInvalid::SpellMode {
+                value: self.spell.mode.clone(),
+            });
+        }
+        if !matches!(self.spell.bar_position.as_str(), "bottom" | "top") {
+            errs.push(ConfigInvalid::SpellBarPosition {
+                value: self.spell.bar_position.clone(),
+            });
+        }
+        if !(1..=5).contains(&self.spell.suggest_count) {
+            errs.push(ConfigInvalid::SpellSuggestCount {
+                value: self.spell.suggest_count,
+            });
+        }
+
         if errs.is_empty() {
             Ok(())
         } else {
@@ -322,7 +435,7 @@ fn is_valid_hotkey(s: &str) -> bool {
                 | "f12" | "f13" | "f14" | "f15" | "f16" | "f17" | "f18" | "f19" | "f20"
                 | "pause" | "break" | "space" | "tab" | "enter" | "return" | "esc"
                 | "escape" | "backspace" | "delete" | "insert" | "home" | "end" | "pageup"
-                | "pagedown" | "up" | "down" | "left" | "right"
+                | "pagedown" | "up" | "down" | "left" | "right" | "period" | "comma"
                 | "capslock" | "caps" | "numlock" | "scrolllock" | "menu" | "printscreen"
         );
     if !key_ok {

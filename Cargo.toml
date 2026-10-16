@@ -40,6 +40,7 @@ ksni = "0.2"
 iced = { version = "0.13", features = ["tokio"] }
 arboard = "3"
 uuid = { version = "1", features = ["v4"] }
+zspell = { version = "0.5", features = ["unstable-suggestions"] }
 
 [profile.release]
 lto = true

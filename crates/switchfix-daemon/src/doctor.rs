@@ -232,17 +232,48 @@ pub async fn run() -> DoctorReport {
 
     // Active hotkey bindings from config (what to actually press).
     {
-        use switchfix_app::ports::ConfigStore;
+        use switchfix_app::ports::{ConfigStore, SpellChecker};
         let store = switchfix_adapters::TomlConfigStore::open_default();
         let cfg = store.load().unwrap_or_default();
         lines.push((
             "hotkeys".into(),
             true,
             format!(
-                "selection=[{}]  toggle=[{}]",
-                cfg.hotkeys.convert_selection, cfg.hotkeys.toggle_enabled
+                "selection=[{}]  toggle=[{}]  fix-spelling=[{}]",
+                cfg.hotkeys.convert_selection, cfg.hotkeys.toggle_enabled, cfg.hotkeys.fix_spelling
             ),
         ));
+
+        // Spellcheck dictionaries + user word list.
+        if cfg.spell.enabled {
+            let user_dic = dirs::data_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("switchfix")
+                .join("user.dic");
+            let dict = switchfix_adapters::ZspellDictionary::load(&cfg.spell.languages, user_dic.clone());
+            let langs = dict.languages();
+            let has = !langs.is_empty();
+            lines.push((
+                "spell dictionaries".into(),
+                has,
+                if has {
+                    format!(
+                        "loaded [{}], mode={}, user.dic={}",
+                        langs.join(", "),
+                        cfg.spell.mode,
+                        if user_dic.is_file() {
+                            user_dic.display().to_string()
+                        } else {
+                            "(not created yet)".into()
+                        }
+                    )
+                } else {
+                    "none found — install hunspell-ru / hunspell-en-us (or switchfix spell off)".into()
+                },
+            ));
+        } else {
+            lines.push(("spell dictionaries".into(), true, "spellcheck disabled".into()));
+        }
     }
 
     DoctorReport { lines }

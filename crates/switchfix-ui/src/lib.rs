@@ -2,8 +2,10 @@
 
 pub mod feedback;
 pub mod settings_app;
+pub mod suggestion_bar;
 pub mod tray;
 
-pub use feedback::{play_hotkey_sound, FLASH_DURATION};
+pub use feedback::{play_fix_sound, play_hotkey_sound, FLASH_DURATION};
 pub use settings_app::run_settings;
+pub use suggestion_bar::run_suggest_bar;
 pub use tray::{TrayHandle, TrayModel};

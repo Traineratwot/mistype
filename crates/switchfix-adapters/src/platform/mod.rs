@@ -21,7 +21,7 @@ use std::sync::Arc;
 use switchfix_app::config::AppConfig;
 use switchfix_app::ports::{
     ClipboardPort, ConfigStore, FocusMonitor, HotkeySource, LayoutSwitcher, Notifier,
-    SelectionCapture, TextInjector, TypingBufferPort,
+    SelectionCapture, SpellChecker, SuggestionPresenter, TextInjector, TypingBufferPort,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +76,7 @@ impl Default for BuildOptions {
     }
 }
 
-/// All eight SwitchFix ports, built for the selected platform.
+/// All SwitchFix ports, built for the selected platform.
 pub struct PlatformServices {
     pub injector: Arc<dyn TextInjector>,
     pub clipboard: Arc<dyn ClipboardPort>,
@@ -88,6 +88,10 @@ pub struct PlatformServices {
     pub notifier: Arc<dyn Notifier>,
     /// Optional: focused-window monitor (KDE). `None` = no focus filtering.
     pub focus: Option<Arc<dyn FocusMonitor>>,
+    /// Optional: spell dictionary. `None` when no hunspell files were found.
+    pub spell: Option<Arc<dyn SpellChecker>>,
+    /// Suggestion bar state / presenter.
+    pub suggestions: Arc<dyn SuggestionPresenter>,
 }
 
 #[derive(Debug, thiserror::Error)]

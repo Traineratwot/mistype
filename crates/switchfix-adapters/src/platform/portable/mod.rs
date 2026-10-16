@@ -4,10 +4,17 @@ pub mod clipboard;
 pub mod config_store;
 pub mod log_notifier;
 pub mod manual_hotkeys;
+pub mod suggestion_state;
 pub mod typing_buffer;
+pub mod zspell_dict;
 
 pub use clipboard::ArboardClipboard;
 pub use config_store::{ensure_config, TomlConfigStore};
 pub use log_notifier::LogNotifier;
 pub use manual_hotkeys::ManualHotkeySource;
+pub use suggestion_state::{
+    suggest_cmd_path, suggest_state_path, NullSuggestionPresenter, SharedSuggestionPresenter,
+    SuggestionState,
+};
 pub use typing_buffer::SharedTypingBuffer;
+pub use zspell_dict::ZspellDictionary;
