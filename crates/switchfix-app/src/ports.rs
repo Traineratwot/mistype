@@ -188,6 +188,17 @@ pub trait TypingBufferPort: Send + Sync {
     fn set_contents(&self, text: &str) {
         let _ = text;
     }
+    /// Last up-to-`max_chars` characters (context for LT/LLM). Default empty.
+    fn peek_tail(&self, max_chars: usize) -> String {
+        let _ = max_chars;
+        String::new()
+    }
+    /// Wait until no physical key has been pressed for `quiet_ms`
+    /// (give up after `max_ms`). Default is a plain sleep.
+    async fn wait_keys_quiet(&self, quiet_ms: u64, max_ms: u64) {
+        let _ = max_ms;
+        tokio::time::sleep(std::time::Duration::from_millis(quiet_ms)).await;
+    }
     /// Stream of word-boundary / fragment events.
     fn word_events(&self) -> broadcast::Receiver<WordEvent> {
         // A never-used channel; adapters that care override this.
@@ -198,6 +209,9 @@ pub trait TypingBufferPort: Send + Sync {
 }
 
 /// Dictionary-backed spelling: check, suggest, learn.
+///
+/// This is the **compat / local dictionary layer** (zspell + user.dic).
+/// Higher-quality ranking / realword fixes go through [`ContextCorrector`].
 #[async_trait]
 pub trait SpellChecker: Send + Sync {
     /// `true` if the word is spelled correctly (or no dictionary is loaded).
@@ -210,6 +224,37 @@ pub trait SpellChecker: Send + Sync {
     fn add_to_dictionary(&self, word: &str) -> Result<(), SpellError>;
     /// Language ids that have a loaded dictionary (e.g. `["ru", "en"]`).
     fn languages(&self) -> Vec<String>;
+}
+
+/// One correction from an external / contextual engine (LanguageTool, LLM).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContextFix {
+    /// Replacement for the target word (or the whole phrase if `word` is None).
+    pub text: String,
+    /// 0.0..=1.0 — how sure the engine is. ≥0.75 can drive auto-replace.
+    pub confidence: f32,
+    /// `true` when the engine believes the original word is already fine.
+    pub is_ok: bool,
+}
+
+/// Contextual spelling / grammar backend (LanguageTool, tiny LLM, …).
+///
+/// Optional hybrid layer over the dictionary [`SpellChecker`]. Absent or
+/// erroring backends must never block the dictionary path.
+#[async_trait]
+pub trait ContextCorrector: Send + Sync {
+    /// Human-readable id for logs (`languagetool`, `llm`, …).
+    fn name(&self) -> &'static str;
+    /// Suggest a fix for `word` given surrounding `context` (recent words).
+    ///
+    /// Return `Ok(vec![ContextFix { is_ok: true, .. }])` when the word is fine
+    /// (veto dictionary false positives). Empty `Ok` = no opinion.
+    async fn correct(
+        &self,
+        word: &str,
+        context: &str,
+        lang: &str,
+    ) -> Result<Vec<ContextFix>, SpellError>;
 }
 
 /// Floating suggestion bar (layer-shell strip on KDE Wayland).

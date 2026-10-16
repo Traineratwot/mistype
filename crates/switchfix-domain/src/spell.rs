@@ -110,6 +110,221 @@ pub fn one_step_neighbors(word: &str) -> Vec<String> {
     out
 }
 
+/// Longest word for which we generate the full edit-1 neighborhood.
+const MAX_EDIT1_WORD: usize = 12;
+
+/// Alphabet used for insert/replace candidates (by script).
+fn alphabet_for(word: &str) -> &'static [char] {
+    match detect_lang(word) {
+        Some("ru") => &[
+            'а', 'б', 'в', 'г', 'д', 'е', 'ё', 'ж', 'з', 'и', 'й', 'к', 'л', 'м', 'н', 'о', 'п',
+            'р', 'с', 'т', 'у', 'ф', 'х', 'ц', 'ч', 'ш', 'щ', 'ъ', 'ы', 'ь', 'э', 'ю', 'я',
+        ],
+        _ => &[
+            'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q',
+            'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+        ],
+    }
+}
+
+/// Full edit-1 neighborhood: deletes, transposes, replaces, inserts.
+///
+/// Filter with the dictionary (`is_correct`) on the caller side — this is
+/// deliberately over-generating so we stop missing obvious typos. Cost is
+/// O(len × alphabet); capped at [`MAX_EDIT1_WORD`].
+pub fn edit1_neighbors(word: &str) -> Vec<String> {
+    let chars: Vec<char> = word.chars().collect();
+    let n = chars.len();
+    if n < 3 {
+        return one_step_neighbors(word);
+    }
+    // Long words: keep the cheap set (full edit-1 explodes).
+    if n > MAX_EDIT1_WORD {
+        return one_step_neighbors(word);
+    }
+
+    let mut out = Vec::with_capacity(n * 40);
+    let mut push = |s: String| {
+        if !out.contains(&s) {
+            out.push(s);
+        }
+    };
+
+    // Deletes.
+    for i in 0..n {
+        let mut s = String::with_capacity(word.len());
+        s.extend(chars[..i].iter());
+        s.extend(chars[i + 1..].iter());
+        push(s);
+    }
+    // Transposes.
+    for i in 0..n.saturating_sub(1) {
+        let mut s = chars.clone();
+        s.swap(i, i + 1);
+        push(s.into_iter().collect());
+    }
+    // Replaces + inserts with the language alphabet.
+    let alpha = alphabet_for(word);
+    for i in 0..n {
+        for &c in alpha {
+            if c == chars[i] {
+                continue;
+            }
+            let mut s = String::with_capacity(word.len());
+            s.extend(chars[..i].iter());
+            s.push(c);
+            s.extend(chars[i + 1..].iter());
+            push(s);
+        }
+    }
+    for i in 0..=n {
+        for &c in alpha {
+            let mut s = String::with_capacity(word.len());
+            s.extend(chars[..i].iter());
+            s.push(c);
+            s.extend(chars[i..].iter());
+            push(s);
+        }
+    }
+
+    // Double-letter collapse at every position (`приветт`, `hhello`).
+    for i in 1..n {
+        if chars[i] == chars[i - 1] {
+            let mut s = String::with_capacity(word.len());
+            s.extend(chars[..i].iter());
+            s.extend(chars[i + 1..].iter());
+            push(s);
+        }
+    }
+    out
+}
+
+/// Common confusable pairs (keyboard / phonetic) — much smaller than edit-1.
+///
+/// Applied one position at a time; callers still filter via the dictionary.
+pub fn confusable_neighbors(word: &str) -> Vec<String> {
+    const EN_PAIRS: &[(char, char)] = &[
+        ('e', 'i'),
+        ('i', 'e'),
+        ('a', 'e'),
+        ('o', 'a'),
+        ('s', 'c'),
+        ('c', 's'),
+        ('k', 'c'),
+        ('m', 'n'),
+        ('n', 'm'),
+        ('t', 'd'),
+        ('d', 't'),
+        ('l', 'r'),
+        ('r', 'l'),
+        ('w', 'v'),
+        ('v', 'w'),
+        ('b', 'p'),
+        ('p', 'b'),
+        ('g', 'j'),
+    ];
+    const RU_PAIRS: &[(char, char)] = &[
+        ('е', 'и'),
+        ('и', 'е'),
+        ('ё', 'о'),
+        ('о', 'ё'),
+        ('ы', 'и'),
+        ('и', 'ы'),
+        ('ь', 'ъ'),
+        ('ъ', 'ь'),
+        ('т', 'д'),
+        ('д', 'т'),
+        ('з', 'с'),
+        ('с', 'з'),
+        ('ж', 'ш'),
+        ('ш', 'ж'),
+        ('ч', 'щ'),
+        ('щ', 'ч'),
+        ('л', 'р'),
+        ('р', 'л'),
+        ('м', 'н'),
+        ('н', 'м'),
+        ('в', 'ф'),
+        ('ф', 'в'),
+        ('к', 'х'),
+        ('г', 'к'),
+        ('б', 'п'),
+        ('п', 'б'),
+        ('у', 'ю'),
+        ('ю', 'у'),
+    ];
+    let pairs: &[(char, char)] = match detect_lang(word) {
+        Some("ru") => RU_PAIRS,
+        _ => EN_PAIRS,
+    };
+    let chars: Vec<char> = word.chars().collect();
+    let mut out = Vec::new();
+    for (i, &c) in chars.iter().enumerate() {
+        for &(a, b) in pairs {
+            let repl = if c == a {
+                Some(b)
+            } else if c == b {
+                Some(a)
+            } else {
+                None
+            };
+            if let Some(r) = repl {
+                if r == c {
+                    continue;
+                }
+                let mut s = String::with_capacity(word.len());
+                s.extend(chars[..i].iter());
+                s.push(r);
+                s.extend(chars[i + 1..].iter());
+                if !out.contains(&s) {
+                    out.push(s);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// How strongly we trust `s` as a replacement for `word` (0.0..=1.0).
+///
+/// Used by auto-replace: only high-confidence fixes are applied silently.
+pub fn suggestion_confidence(word: &str, s: &Suggestion) -> f32 {
+    match s.kind {
+        SuggestionKind::LayoutConvert => 0.95,
+        // Context (LT / LLM) ranked this — treat as strong but not absolute.
+        SuggestionKind::SpellFix if s.text.chars().count() > 0 && word != s.text => {
+            let dist = edit_distance(word, &s.text);
+            match dist {
+                0 => 0.0,
+                1 => 0.82,
+                2 => 0.55,
+                _ => 0.25,
+            }
+        }
+        SuggestionKind::SpellFix => 0.0,
+        SuggestionKind::Completion => 0.35,
+    }
+}
+
+/// Drop weak far-away candidates that only add noise to the bar.
+pub fn filter_candidates(word: &str, candidates: Vec<Suggestion>, max_dist: usize) -> Vec<Suggestion> {
+    candidates
+        .into_iter()
+        .filter(|s| {
+            if s.text == word {
+                return false;
+            }
+            if s.kind == SuggestionKind::LayoutConvert {
+                return true;
+            }
+            if s.kind == SuggestionKind::Completion {
+                return true;
+            }
+            edit_distance(word, &s.text) <= max_dist
+        })
+        .collect()
+}
+
 /// Levenshtein distance (chars, not bytes).
 pub fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
@@ -169,6 +384,10 @@ pub fn should_auto_apply(suggestions: &[Suggestion], word: &str, min_len: usize)
     }
     let dist = edit_distance(word, &top.text);
     if !(1..=2).contains(&dist) {
+        return false;
+    }
+    // Confidence gate: hybrid / context fixes still need to be close.
+    if suggestion_confidence(word, top) < 0.75 {
         return false;
     }
     if suggestions.len() > 1 {
@@ -335,6 +554,48 @@ mod tests {
         assert!(n.contains(&"привет".to_string()), "drop last: {n:?}");
         let n = one_step_neighbors("teh");
         assert!(n.contains(&"the".to_string()), "swap tail: {n:?}");
+    }
+
+    #[test]
+    fn edit1_neighbors_includes_insert_delete_replace() {
+        let n = edit1_neighbors("helo");
+        assert!(n.contains(&"hello".to_string()), "insert: {n:?}");
+        assert!(n.contains(&"elo".to_string()), "delete: {n:?}");
+        assert!(n.contains(&"help".to_string()) || n.contains(&"held".to_string()), "replace");
+        // Double-letter collapse still present.
+        let n = edit1_neighbors("приветт");
+        assert!(n.contains(&"привет".to_string()), "collapse: {n:?}");
+    }
+
+    #[test]
+    fn edit1_long_word_falls_back_to_cheap() {
+        let word = "оченьдлинноеслово";
+        let n = edit1_neighbors(word);
+        assert!(n.len() < 32, "cheap path for long words, got {}", n.len());
+    }
+
+    #[test]
+    fn confusable_neighbors_covers_homophones() {
+        let n = confusable_neighbors("привед");
+        assert!(n.contains(&"привид".to_string()), "е→и: {n:?}");
+        assert!(n.contains(&"превед".to_string()), "и→е: {n:?}");
+        assert!(n.contains(&"привет".to_string()), "д→т: {n:?}");
+    }
+
+    #[test]
+    fn filter_candidates_drops_far_and_self() {
+        let w = "helo";
+        let c = vec![
+            Suggestion::new("hello", SuggestionKind::SpellFix, w),
+            Suggestion::new("helo", SuggestionKind::SpellFix, w),
+            Suggestion::new("elephant", SuggestionKind::SpellFix, w),
+            Suggestion::new("привет", SuggestionKind::LayoutConvert, w),
+        ];
+        let f = filter_candidates(w, c, 2);
+        assert!(f.iter().any(|s| s.text == "hello"));
+        assert!(f.iter().any(|s| s.kind == SuggestionKind::LayoutConvert));
+        assert!(!f.iter().any(|s| s.text == "helo"));
+        assert!(!f.iter().any(|s| s.text == "elephant"));
     }
 
     #[test]

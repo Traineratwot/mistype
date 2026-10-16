@@ -94,7 +94,7 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
     ));
 
     let spell_svc = spell.map(|checker| {
-        Arc::new(SpellService::with_focus(
+        let svc = Arc::new(SpellService::with_focus(
             checker,
             injector,
             suggestions,
@@ -103,7 +103,16 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
             config_rx.clone(),
             focus,
             cfg.general.enabled_on_start,
-        ))
+        ));
+        // Hybrid context layer (LanguageTool / LLM) — optional.
+        if let Some(ctx) = switchfix_adapters::platform::portable::build_context_corrector(
+            &cfg.spell.backend,
+            &cfg.spell.lt_url,
+            &cfg.spell.llm_cmd,
+        ) {
+            svc.set_context_corrector(std::sync::Arc::from(ctx));
+        }
+        svc
     });
     if spell_svc.is_some() {
         info!("spellcheck wired (mode={})", cfg.spell.mode);
@@ -121,15 +130,22 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
         cfg.hotkeys.hotkey_consume
     );
     info!(
-        "spell: enabled={} mode='{}' langs={:?} min_word_len={} suggest_count={} auto_fix_min_len={} sound={}",
+        "spell: enabled={} mode='{}' backend='{}' langs={:?} min_word_len={} suggest_count={} auto_fix_min_len={} sound={}",
         cfg.spell.enabled,
         cfg.spell.mode,
+        cfg.spell.backend,
         cfg.spell.languages,
         cfg.spell.min_word_len,
         cfg.spell.suggest_count,
         cfg.spell.auto_fix_min_len,
         cfg.spell.sound
     );
+    if !cfg.spell.lt_url.is_empty() {
+        info!("spell context: languagetool url={}", cfg.spell.lt_url);
+    }
+    if !cfg.spell.llm_cmd.is_empty() {
+        info!("spell context: llm cmd={}", cfg.spell.llm_cmd);
+    }
     info!(
         "typing_buffer={} max_keys={}  layouts.active={:?}",
         cfg.privacy.typing_buffer, cfg.privacy.typing_buffer_max_keys, cfg.layouts.active

@@ -436,10 +436,21 @@ fn run_loop(
 
     loop {
         let mut got_any = false;
-        for dev in devices.iter_mut() {
+        let mut dead: Vec<usize> = Vec::new();
+        for (idx, dev) in devices.iter_mut().enumerate() {
             let events = match dev.fetch_events() {
                 Ok(e) => e,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                // Unplugged / vanished — drop the device instead of spamming
+                // "No such device" forever.
+                Err(e) if e.raw_os_error() == Some(19) || e.kind() == std::io::ErrorKind::NotFound => {
+                    warn!(
+                        "evdev device disconnected ({e}) — dropping it; \
+                         hotkeys keep working on remaining keyboards"
+                    );
+                    dead.push(idx);
+                    continue;
+                }
                 Err(e) => {
                     warn!("evdev read error: {e}");
                     continue;
@@ -526,6 +537,12 @@ fn run_loop(
                         buffer.push(mapper.map_char(latin));
                     }
                 }
+                // Track held keys so spell can wait for release before inject.
+                match value {
+                    1 => buffer.note_key_down(),
+                    0 => buffer.note_key_up(),
+                    _ => buffer.note_key_event(),
+                }
 
                 // Consume mode: re-inject everything else so typing still works.
                 if consuming {
@@ -534,6 +551,19 @@ fn run_loop(
                     }
                 }
             }
+        }
+
+        // Remove vanished devices (from the end so indices stay valid).
+        if !dead.is_empty() {
+            for i in dead.into_iter().rev() {
+                devices.remove(i);
+            }
+            info!("evdev: {} keyboard(s) left", devices.len());
+        }
+        if devices.is_empty() {
+            // No keyboards — don't spin at 100% logging errors.
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            continue;
         }
 
         // Back off a little when idle so we don't spin the CPU.

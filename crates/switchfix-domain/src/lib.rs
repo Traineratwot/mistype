@@ -13,8 +13,9 @@ pub use conversion::{
 };
 pub use error::DomainError;
 pub use spell::{
-    detect_lang, edit_distance, is_auto_fixable, one_step_neighbors, preserve_case, rank,
-    should_auto_apply, should_check, Suggestion, SuggestionKind,
+    confusable_neighbors, detect_lang, edit1_neighbors, edit_distance, filter_candidates,
+    is_auto_fixable, one_step_neighbors, preserve_case, rank, should_auto_apply, should_check,
+    suggestion_confidence, Suggestion, SuggestionKind,
 };
 pub use model::{
     CorrectionOutcome, CorrectionRequest, KeyChord, LayoutId, LayoutIndex, LayoutInfo,

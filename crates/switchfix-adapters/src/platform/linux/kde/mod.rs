@@ -157,7 +157,7 @@ impl Platform for KdePlatform {
             Box::new(ManualHotkeySource::new())
         };
 
-        // Spell dictionaries (optional — degrade gracefully).
+        // Spell dictionaries (optional — degrade gracefully). Compat layer.
         let spell = if cfg.spell.enabled {
             let user_dic = dirs::data_dir()
                 .unwrap_or_else(|| std::path::PathBuf::from("."))

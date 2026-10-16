@@ -1,8 +1,9 @@
 //! Shared keystroke buffer (RAM only) — portable.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use switchfix_app::ports::{TypingBufferPort, WordEvent};
 use switchfix_domain::WordSpan;
@@ -15,6 +16,14 @@ pub struct SharedTypingBuffer {
     max: usize,
     enabled: AtomicBool,
     word_tx: broadcast::Sender<WordEvent>,
+    /// Monotonic ms of the last physical key event (down or up).
+    /// Used to wait until the user releases the completing key before
+    /// injecting a word replace (arrow keys / backspace mid-press break).
+    last_key_ms: AtomicU64,
+    /// How many physical keys are currently held down. A held key does not
+    /// generate events, so time-since-last-event alone is not enough.
+    keys_down: AtomicUsize,
+    started: Instant,
 }
 
 impl SharedTypingBuffer {
@@ -25,7 +34,65 @@ impl SharedTypingBuffer {
             max: max.max(1),
             enabled: AtomicBool::new(enabled),
             word_tx,
+            last_key_ms: AtomicU64::new(0),
+            keys_down: AtomicUsize::new(0),
+            started: Instant::now(),
         })
+    }
+
+    /// Record a physical key event (call from the input loop on down and up).
+    pub fn note_key_event(&self) {
+        let ms = self.started.elapsed().as_millis() as u64;
+        self.last_key_ms.store(ms, Ordering::SeqCst);
+    }
+
+    /// Physical key pressed (value=1).
+    pub fn note_key_down(&self) {
+        self.keys_down.fetch_add(1, Ordering::SeqCst);
+        self.note_key_event();
+    }
+
+    /// Physical key released (value=0).
+    pub fn note_key_up(&self) {
+        self.keys_down
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                Some(n.saturating_sub(1))
+            })
+            .ok();
+        self.note_key_event();
+    }
+
+    /// How many physical keys are held right now.
+    pub fn keys_down(&self) -> usize {
+        self.keys_down.load(Ordering::SeqCst)
+    }
+
+    /// How long ago was the last physical key event?
+    pub fn ms_since_last_key(&self) -> u64 {
+        let ms = self.started.elapsed().as_millis() as u64;
+        let last = self.last_key_ms.load(Ordering::SeqCst);
+        ms.saturating_sub(last)
+    }
+
+    /// Block until **no keys are held** and none has been seen for `quiet_ms`
+    /// (give up after `max_ms`).
+    pub async fn wait_keys_quiet(&self, quiet_ms: u64, max_ms: u64) {
+        let deadline = Instant::now() + Duration::from_millis(max_ms);
+        loop {
+            let held = self.keys_down();
+            let quiet = self.ms_since_last_key() >= quiet_ms;
+            if held == 0 && quiet {
+                return;
+            }
+            if Instant::now() >= deadline {
+                tracing::debug!(
+                    "wait_keys_quiet timeout (held={held}, since={})",
+                    self.ms_since_last_key()
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     pub fn push(&self, c: char) {
@@ -126,6 +193,16 @@ impl SharedTypingBuffer {
         }
     }
 
+    /// Last `max_chars` characters as a string (spell-backend context).
+    pub fn peek_tail(&self, max_chars: usize) -> String {
+        if !self.enabled.load(Ordering::SeqCst) {
+            return String::new();
+        }
+        let g = self.chars.lock().unwrap();
+        let skip = g.len().saturating_sub(max_chars);
+        g.iter().skip(skip).collect()
+    }
+
     pub fn take_last_word(&self) -> Option<WordSpan> {
         if !self.enabled.load(Ordering::SeqCst) {
             return None;
@@ -158,6 +235,7 @@ impl SharedTypingBuffer {
     }
 }
 
+#[async_trait::async_trait]
 impl TypingBufferPort for SharedTypingBuffer {
     fn take_last_word(&self) -> Option<WordSpan> {
         SharedTypingBuffer::take_last_word(self)
@@ -179,6 +257,12 @@ impl TypingBufferPort for SharedTypingBuffer {
     }
     fn set_contents(&self, text: &str) {
         SharedTypingBuffer::set_contents(self, text);
+    }
+    fn peek_tail(&self, max_chars: usize) -> String {
+        SharedTypingBuffer::peek_tail(self, max_chars)
+    }
+    async fn wait_keys_quiet(&self, quiet_ms: u64, max_ms: u64) {
+        SharedTypingBuffer::wait_keys_quiet(self, quiet_ms, max_ms).await;
     }
     fn word_events(&self) -> broadcast::Receiver<WordEvent> {
         self.word_tx.subscribe()
@@ -252,5 +336,22 @@ mod tests {
             }
         }
         assert_eq!(got.as_deref(), Some("привет"));
+    }
+
+    #[tokio::test]
+    async fn wait_keys_quiet_requires_key_release() {
+        let b = SharedTypingBuffer::new(64, true);
+        b.note_key_down(); // space held — no new events while held
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        // Held key: must NOT be quiet yet (old bug: time-since-event looked quiet).
+        assert!(b.keys_down() == 1);
+        let start = Instant::now();
+        // Give it only a short max; it should hit the timeout while held.
+        b.wait_keys_quiet(20, 80).await;
+        assert!(start.elapsed() >= Duration::from_millis(50), "must wait while held");
+        b.note_key_up();
+        let start = Instant::now();
+        b.wait_keys_quiet(20, 500).await;
+        assert!(start.elapsed() < Duration::from_millis(200), "returns quickly after release");
     }
 }

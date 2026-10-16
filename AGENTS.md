@@ -19,7 +19,7 @@ stubs behind a platform layer (groundwork for the future).
 | Tray + settings GUI + suggestion bar | `switchfix-ui` | ✅ compiles, flash/sound + bar |
 | CLI / daemon / doctor / selftest / spell | `switchfix-daemon` | ✅ works on live KDE |
 
-**Tests: 119 green** (+ 1 ignored live KDE D-Bus test). Verified live:
+**Tests: 154 green** (+ 1 ignored live KDE D-Bus test). Verified live:
 hotkey intercept (evdev), layout switch (zbus), convert, tray flash + sound,
 spellcheck CLI (zspell RU/EN + layout-convert candidates).
 
@@ -244,6 +244,10 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 - `privacy.typing_buffer`, `privacy.typing_buffer_max_keys`
 - `layouts.active` — KDE short ids `["us","ru"]`
 - `spell.enabled`, `spell.mode` (`off|hint|hotkey|auto`)
+- `spell.backend` (`dict`|`hybrid`|`auto`) — hybrid adds edit-1/confusable neighbors + optional context engine
+- `spell.lt_url` (LanguageTool HTTP, e.g. `http://127.0.0.1:8010`), `spell.llm_cmd` (JSON stdin/stdout corrector)
+- `spell.context_chars` (how much typed tail is sent as context)
+- Hybrid LLM wrapper: `tools/llm-spell/` (`llm-spell` + `setup.sh`). Persistent JSON-lines, backends `t5|ollama|rules`, models ≤300 MB.
 - `spell.languages` (`["ru","en"]`), `spell.min_word_len`, `spell.completion_min_chars`
 - `spell.suggest_count`, `spell.bar_position`, `spell.bar_timeout_ms`
 - `spell.auto_fix_min_len`, `spell.sound` (short signal on word replace)

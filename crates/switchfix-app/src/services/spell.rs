@@ -9,16 +9,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use switchfix_domain::{
-    convert, detect_lang, one_step_neighbors, preserve_case, rank, should_auto_apply, should_check,
-    ConversionSet, Suggestion, SuggestionKind,
+    confusable_neighbors, convert, detect_lang, edit1_neighbors, filter_candidates,
+    one_step_neighbors, preserve_case, rank, should_auto_apply, should_check, ConversionSet,
+    Suggestion, SuggestionKind,
 };
 use tokio::sync::watch;
 use tracing::debug;
 
 use crate::config::AppConfig;
 use crate::ports::{
-    FocusMonitor, SpellChecker, SuggestionPresenter, SuggestionUi, TextInjector, TypingBufferPort,
-    WordEvent,
+    ContextCorrector, FocusMonitor, SpellChecker, SuggestionPresenter, SuggestionUi, TextInjector,
+    TypingBufferPort, WordEvent,
 };
 
 /// What happened — the caller uses this to play a sound / flash the tray.
@@ -51,6 +52,8 @@ struct Pending {
 /// Orchestrates spellcheck, completion and word replacement.
 pub struct SpellService {
     spell: Arc<dyn SpellChecker>,
+    /// Optional hybrid layer (LanguageTool / LLM). Never blocks the dict path.
+    context: Mutex<Option<Arc<dyn ContextCorrector>>>,
     injector: Arc<dyn TextInjector>,
     presenter: Arc<dyn SuggestionPresenter>,
     buffer: Arc<dyn TypingBufferPort>,
@@ -96,6 +99,7 @@ impl SpellService {
     ) -> Self {
         Self {
             spell,
+            context: Mutex::new(None),
             injector,
             presenter,
             buffer,
@@ -109,6 +113,12 @@ impl SpellService {
             auto_block: AtomicBool::new(false),
             last_replace: Mutex::new(None),
         }
+    }
+
+    /// Install a hybrid context backend (LanguageTool / LLM). Optional.
+    pub fn set_context_corrector(&self, ctx: Arc<dyn ContextCorrector>) {
+        debug!("spell context backend: {}", ctx.name());
+        *self.context.lock().unwrap() = Some(ctx);
     }
 
     /// Swap conversion tables at runtime (config reload).
@@ -197,7 +207,7 @@ impl SpellService {
             }
         };
 
-        let Some(mut candidates) = self.candidates_for(&word, &cfg, false) else {
+        let Some(mut candidates) = self.candidates_for(&word, &cfg, false).await else {
             return SpellAction::None;
         };
         candidates = rank(&word, candidates);
@@ -290,7 +300,7 @@ impl SpellService {
             return SpellAction::None;
         }
 
-        let Some(candidates) = self.candidates_for(&word, cfg, false) else {
+        let Some(candidates) = self.candidates_for(&word, cfg, false).await else {
             debug!("spell skip word {:?}: candidates_for=None (lang/config/correct)", word);
             let _ = self.dismiss_if_showing().await;
             return SpellAction::None;
@@ -355,7 +365,7 @@ impl SpellService {
             return SpellAction::None;
         }
 
-        let Some(candidates) = self.candidates_for(&frag, cfg, true) else {
+        let Some(candidates) = self.candidates_for(&frag, cfg, true).await else {
             return SpellAction::None;
         };
         if candidates.is_empty() {
@@ -369,8 +379,14 @@ impl SpellService {
 
     /// Build ranked-able candidates for `word`.
     ///
+    /// Hybrid layers:
+    /// 1. layout-convert (core SwitchFix)
+    /// 2. dictionary suggest (compat zspell)
+    /// 3. expanded edit-1 + confusable neighbors filtered by the dictionary
+    /// 4. optional ContextCorrector (LT / LLM) — can also veto false positives
+    ///
     /// `completions_only` switches to prefix completion instead of spell-fix.
-    fn candidates_for(
+    async fn candidates_for(
         &self,
         word: &str,
         cfg: &AppConfig,
@@ -381,6 +397,7 @@ impl SpellService {
             return None;
         }
         let n = cfg.spell.suggest_count.saturating_add(3); // over-fetch, rank later
+        let use_hybrid = cfg.spell.backend != "dict";
 
         let mut out: Vec<Suggestion> = Vec::new();
 
@@ -391,48 +408,162 @@ impl SpellService {
             return Some(out);
         }
 
+        let dict_ok = self.spell.is_correct(word, lang);
+
+        // One context query per word (LT/LLM is the expensive layer).
+        let ctx_fixes = if use_hybrid && !completions_only {
+            self.context_fixes(word, lang, cfg).await
+        } else {
+            Vec::new()
+        };
+
+        // Context veto: dictionary said "wrong", but the engine says it's fine
+        // (classic Russian morphology false-positive). Don't show a bar at all.
+        if !dict_ok && ctx_fixes.iter().any(|f| f.is_ok) {
+            debug!(
+                "spell skip {:?}: context says word is ok (dict false positive)",
+                word
+            );
+            return None;
+        }
+
+        // High-confidence context fix (with layout-convert) — skip the dict pile.
+        if !dict_ok {
+            let strong: Vec<Suggestion> = ctx_fixes
+                .iter()
+                .filter(|f| !f.is_ok && f.confidence >= 0.75)
+                .map(|f| Suggestion::new(f.text.clone(), SuggestionKind::SpellFix, word))
+                .collect();
+            if !strong.is_empty() {
+                let conv = self.layout_candidate(word);
+                let mut merged = Vec::new();
+                if let Some(c) = conv {
+                    merged.push(c);
+                }
+                merged.extend(strong);
+                return Some(filter_candidates(word, merged, 3));
+            }
+        }
+
         // Correct word → no spell-fix candidates (layout-convert still worth a try
         // only when the word is *incorrect* in its own script).
-        if self.spell.is_correct(word, lang) {
+        if dict_ok {
             debug!("word {:?} is correct in '{}', no spell-fix", word, lang);
             return None;
         }
 
         // Layout-convert candidate: `ghbdtn` → `привет` when that is a real word.
-        let conv = {
-            let tables = self.tables.read().unwrap();
-            convert(word, &tables, None, None)
-        };
-        if let Ok(conv) = conv {
-            let converted = conv.converted;
-            if let Some(c_lang) = detect_lang(&converted) {
-                if self.spell.is_correct(&converted, c_lang) {
-                    out.push(Suggestion::new(
-                        converted,
-                        SuggestionKind::LayoutConvert,
-                        word,
-                    ));
-                }
-            }
+        if let Some(c) = self.layout_candidate(word) {
+            out.push(c);
         }
 
         for c in self.spell.suggest(word, lang, n) {
             out.push(Suggestion::new(c, SuggestionKind::SpellFix, word));
         }
 
-        // zspell ranking can miss the obvious edit; add one-step neighbors
-        // that the dictionary accepts (drop-last, drop-first, transpose-tail).
-        for cand in one_step_neighbors(word) {
-            if out.iter().any(|s| s.text == cand) {
-                continue;
+        if use_hybrid {
+            // Broad neighborhood: the cheap one-step set misses most typos.
+            for cand in edit1_neighbors(word)
+                .into_iter()
+                .chain(confusable_neighbors(word))
+            {
+                if out.iter().any(|s| s.text == cand) {
+                    continue;
+                }
+                if let Some(m_lang) = detect_lang(&cand) {
+                    if self.spell.is_correct(&cand, m_lang) {
+                        out.push(Suggestion::new(cand, SuggestionKind::SpellFix, word));
+                    }
+                }
             }
-            if let Some(m_lang) = detect_lang(&cand) {
-                if self.spell.is_correct(&cand, m_lang) {
-                    out.push(Suggestion::new(cand, SuggestionKind::SpellFix, word));
+            // Remaining context suggestions (weaker than the strong-fix path).
+            for f in &ctx_fixes {
+                if f.is_ok || f.confidence < 0.5 {
+                    continue;
+                }
+                if !out.iter().any(|s| s.text == f.text) {
+                    out.push(Suggestion::new(f.text.clone(), SuggestionKind::SpellFix, word));
+                }
+            }
+        } else {
+            // Compat path: the old cheap neighbors only.
+            for cand in one_step_neighbors(word) {
+                if out.iter().any(|s| s.text == cand) {
+                    continue;
+                }
+                if let Some(m_lang) = detect_lang(&cand) {
+                    if self.spell.is_correct(&cand, m_lang) {
+                        out.push(Suggestion::new(cand, SuggestionKind::SpellFix, word));
+                    }
                 }
             }
         }
+
+        // Drop far-away junk that only confuses ranking / auto-replace.
+        let out = filter_candidates(word, out, 3);
         Some(out)
+    }
+
+    fn layout_candidate(&self, word: &str) -> Option<Suggestion> {
+        let conv = {
+            let tables = self.tables.read().unwrap();
+            convert(word, &tables, None, None)
+        };
+        let conv = conv.ok()?;
+        let converted = conv.converted;
+        if converted == word {
+            return None;
+        }
+        let c_lang = detect_lang(&converted)?;
+        if self.spell.is_correct(&converted, c_lang) {
+            Some(Suggestion::new(
+                converted,
+                SuggestionKind::LayoutConvert,
+                word,
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Ask the hybrid backend about `word`. Soft-fails to empty.
+    async fn context_fixes(
+        &self,
+        word: &str,
+        lang: &str,
+        cfg: &AppConfig,
+    ) -> Vec<crate::ports::ContextFix> {
+        let Some(ctx) = self.context.lock().unwrap().clone() else {
+            return Vec::new();
+        };
+        let tail = self.buffer.peek_tail(cfg.spell.context_chars);
+        // Context should not end with the word itself twice.
+        let context = {
+            let t = tail.trim_end();
+            t.strip_suffix(word)
+                .map(|s| s.trim_end().to_string())
+                .unwrap_or_else(|| t.to_string())
+        };
+        match ctx.correct(word, &context, lang).await {
+            Ok(fixes) => {
+                if !fixes.is_empty() {
+                    debug!(
+                        "context[{}] word={:?} fixes={:?}",
+                        ctx.name(),
+                        word,
+                        fixes
+                            .iter()
+                            .map(|f| (f.text.as_str(), f.is_ok, f.confidence))
+                            .collect::<Vec<_>>()
+                    );
+                }
+                fixes
+            }
+            Err(e) => {
+                debug!("context[{}] failed: {e}", ctx.name());
+                Vec::new()
+            }
+        }
     }
 
     async fn show_bar(
@@ -489,25 +620,19 @@ impl SpellService {
         // Ignore our own injected keystrokes so they don't re-complete the word.
         self.suppress.store(true, Ordering::SeqCst);
 
-        // Wait for the completing key (Space / punctuation) to reach the app
-        // before we move the cursor — otherwise we can erase the space *before*
-        // the word.
-        let sep_len = trailing.chars().count();
-        if sep_len > 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-            // Cursor sits after `trailing`. Step over it so backspace only
-            // removes the word and never touches the separator (or the space
-            // before the word).
-            if let Err(e) = self.injector.cursor_left(sep_len).await {
-                tracing::warn!("spell replace failed (cursor_left): {e}");
-                self.suppress.store(false, Ordering::SeqCst);
-                return SpellAction::None;
-            }
-        }
+        // The completing key (Space) may still be held — we must wait until
+        // it is released, or the app ignores / reorders our backspace and
+        // the typed separator is lost.
+        self.buffer.wait_keys_quiet(50, 500).await;
 
-        if erase_len > 0 {
-            if let Err(e) = self.injector.backspace(erase_len).await {
-                tracing::warn!("spell replace failed (backspace {erase_len}): {e}");
+        // Fully deterministic: delete word + the separator after it, then
+        // type the replacement and put the separator back. Never touch the
+        // space *before* the word (it is outside this range).
+        let sep_len = trailing.chars().count();
+        let total = erase_len + sep_len;
+        if total > 0 {
+            if let Err(e) = self.injector.backspace(total).await {
+                tracing::warn!("spell replace failed (backspace {total}): {e}");
                 self.suppress.store(false, Ordering::SeqCst);
                 return SpellAction::None;
             }
@@ -517,17 +642,19 @@ impl SpellService {
             self.suppress.store(false, Ordering::SeqCst);
             return SpellAction::None;
         }
-        // Cursor is now *before* the trailing separator we stepped over.
-        // Move past it so the next keystroke starts a new word — otherwise
-        // the user must press Space again to unstick the caret.
-        if sep_len > 0 {
-            if let Err(e) = self.injector.cursor_right(sep_len).await {
-                tracing::warn!("spell replace failed (cursor_right): {e}");
+        // Always restore the separator so the caret ends up *after* it —
+        // the user must not press Space a second time.
+        if !trailing.is_empty() {
+            let sep_layout = switchfix_domain::LayoutId::new("us");
+            if let Err(e) = self.injector.type_text(trailing, &sep_layout).await {
+                tracing::warn!("spell replace failed (type separator {trailing:?}): {e}");
             }
+            // Let the injected key commit before we return (some apps
+            // coalesce uinput events if we immediately continue).
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
 
         // Sync buffer to what is now on screen — without word events.
-        // `trailing` is still typed after the word (we never deleted it).
         let mut synced = replacement.to_string();
         synced.push_str(trailing);
         self.buffer.set_contents(&synced);
@@ -548,7 +675,7 @@ impl SpellService {
             from = original,
             to = replacement,
             trailing,
-            "spell replaced (word only; separators kept)"
+            "spell replaced (word+sep rewritten; space before untouched)"
         );
         SpellAction::Replaced {
             from: original.to_string(),
@@ -766,15 +893,15 @@ mod tests {
         );
         assert!(!p.is_visible());
         let log = i.log.lock().unwrap().clone();
-        // Step over the trailing space, erase the word only, type replacement,
-        // then step back past the space so the caret is at the end.
-        assert_eq!(log, vec!["left:1", "bs:7", "type:привет:ru", "right:1"]);
+        // Delete word + the trailing space, type replacement + space.
+        // Space *before* the word is outside the backspace range.
+        assert_eq!(log, vec!["bs:8", "type:привет:ru", "type: :us"]);
     }
 
     #[tokio::test]
     async fn replace_preserves_spaces_around_word() {
         let (svc, i, _p) = setup("auto");
-        // «приветт» + Space → replace word, keep both surrounding spaces.
+        // «приветт» + Space → replace word, keep space before, restore space after.
         let action = svc
             .on_word_event(WordEvent::Completed {
                 word: WordSpan {
@@ -786,13 +913,9 @@ mod tests {
             .await;
         assert!(matches!(action, SpellAction::Replaced { .. }));
         let log = i.log.lock().unwrap().clone();
-        assert_eq!(log[0], "left:1", "must step over trailing space first");
-        assert_eq!(log[1], "bs:7", "erase only the 7-char word");
-        assert_eq!(log[3], "right:1", "caret must end after the space");
-        assert!(
-            !log.iter().any(|l| l == "type: :us"),
-            "must not re-type / invent extra spaces: {log:?}"
-        );
+        assert_eq!(log[0], "bs:8", "word (7) + trailing space (1)");
+        assert_eq!(log[1], "type:привет:ru");
+        assert_eq!(log[2], "type: :us", "space after must be typed");
     }
 
     #[tokio::test]
@@ -816,9 +939,9 @@ mod tests {
             }
         );
         let log = i.log.lock().unwrap().clone();
-        assert_eq!(log[0], "left:1");
-        assert_eq!(log[1], "bs:6");
-        assert_eq!(log[2], "type:привет:ru");
+        assert_eq!(log[0], "bs:7");
+        assert_eq!(log[1], "type:привет:ru");
+        assert_eq!(log[2], "type: :us");
     }
 
     #[tokio::test]
@@ -842,9 +965,9 @@ mod tests {
         );
         assert!(!p.is_visible());
         let log = i.log.lock().unwrap().clone();
-        assert_eq!(log[0], "left:1");
-        assert_eq!(log[1], "bs:7");
-        assert_eq!(log[3], "right:1");
+        assert_eq!(log[0], "bs:8");
+        assert_eq!(log[1], "type:привет:ru");
+        assert_eq!(log[2], "type: :us");
     }
 
     #[tokio::test]
@@ -962,6 +1085,118 @@ mod tests {
             .await;
         assert_eq!(action, SpellAction::None);
         assert!(!p.is_visible());
+    }
+
+    struct FakeContext {
+        fixes: StdMutex<Vec<crate::ports::ContextFix>>,
+        calls: StdMutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::ports::ContextCorrector for FakeContext {
+        fn name(&self) -> &'static str {
+            "fake"
+        }
+        async fn correct(
+            &self,
+            word: &str,
+            _context: &str,
+            _lang: &str,
+        ) -> Result<Vec<crate::ports::ContextFix>, SpellError> {
+            self.calls.lock().unwrap().push(word.to_string());
+            Ok(self.fixes.lock().unwrap().clone())
+        }
+    }
+
+    fn setup_with_context(
+        mode: &str,
+        ctx: Arc<FakeContext>,
+    ) -> (SpellService, Arc<FakeInjector>, Arc<FakePresenter>) {
+        let (svc, i, p) = setup(mode);
+        svc.set_context_corrector(ctx);
+        (svc, i, p)
+    }
+
+    #[tokio::test]
+    async fn hybrid_neighbors_find_typo_dict_missed() {
+        // FakeSpell.suggest("helo") is empty — only edit-1 neighbors can save us.
+        let (svc, _i, p) = setup("hint");
+        let action = svc
+            .on_word_event(WordEvent::Completed {
+                word: WordSpan {
+                    text: "helo".into(),
+                    char_len: 4,
+                },
+                separator: ' ',
+            })
+            .await;
+        assert_eq!(action, SpellAction::ShowedHints, "edit-1 should find hello");
+        assert!(p.is_visible());
+        let action = svc.accept_slot(1).await;
+        assert_eq!(
+            action,
+            SpellAction::Replaced {
+                from: "helo".into(),
+                to: "hello".into(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn context_veto_suppresses_dict_false_positive() {
+        // Dict says «запустил» is wrong (inflection gap) — context says it's fine.
+        let ctx = Arc::new(FakeContext {
+            fixes: StdMutex::new(vec![crate::ports::ContextFix {
+                text: "запустил".into(),
+                confidence: 0.9,
+                is_ok: true,
+            }]),
+            calls: StdMutex::new(Vec::new()),
+        });
+        let (svc, _i, p) = setup_with_context("hint", ctx.clone());
+        let action = svc
+            .on_word_event(WordEvent::Completed {
+                word: WordSpan {
+                    text: "запустил".into(),
+                    char_len: 8,
+                },
+                separator: ' ',
+            })
+            .await;
+        assert_eq!(action, SpellAction::None);
+        assert!(!p.is_visible());
+        assert_eq!(ctx.calls.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn context_strong_fix_wins_over_dict_pile() {
+        let ctx = Arc::new(FakeContext {
+            fixes: StdMutex::new(vec![crate::ports::ContextFix {
+                text: "привет".into(),
+                confidence: 0.92,
+                is_ok: false,
+            }]),
+            calls: StdMutex::new(Vec::new()),
+        });
+        let (svc, _i, _p) = setup_with_context("hint", ctx);
+        let action = svc
+            .on_word_event(WordEvent::Completed {
+                word: WordSpan {
+                    text: "приветт".into(),
+                    char_len: 7,
+                },
+                separator: ' ',
+            })
+            .await;
+        assert_eq!(action, SpellAction::ShowedHints);
+        let action = svc.accept_slot(1).await;
+        assert_eq!(
+            action,
+            SpellAction::Replaced {
+                from: "приветт".into(),
+                to: "привет".into(),
+            }
+        );
     }
 
     // Silence unused import warnings for re-exports used by fakes.

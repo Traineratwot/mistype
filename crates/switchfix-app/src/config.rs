@@ -285,6 +285,19 @@ pub struct Spell {
     /// Play a short sound when a word is replaced.
     #[serde(default = "def_true")]
     pub sound: bool,
+    /// Spell backend: `dict` (compat only) | `hybrid` (dict + context) | `auto`.
+    #[serde(default = "def_spell_backend")]
+    pub backend: String,
+    /// LanguageTool HTTP base URL (e.g. `http://127.0.0.1:8010`). Empty = off.
+    #[serde(default = "def_empty")]
+    pub lt_url: String,
+    /// External corrector command: reads JSON on stdin, writes JSON on stdout.
+    /// Empty = off. Example: `llm-spell` or `ollama run llama3.2:1b`.
+    #[serde(default = "def_empty")]
+    pub llm_cmd: String,
+    /// Max recent characters sent as context to LT/LLM.
+    #[serde(default = "def_context_chars")]
+    pub context_chars: usize,
 }
 
 fn def_spell_mode() -> String {
@@ -311,6 +324,15 @@ fn def_bar_timeout() -> u64 {
 fn def_auto_fix_min_len() -> usize {
     4
 }
+fn def_spell_backend() -> String {
+    "hybrid".into()
+}
+fn def_empty() -> String {
+    String::new()
+}
+fn def_context_chars() -> usize {
+    80
+}
 
 impl Default for Spell {
     fn default() -> Self {
@@ -325,6 +347,10 @@ impl Default for Spell {
             bar_timeout_ms: def_bar_timeout(),
             auto_fix_min_len: def_auto_fix_min_len(),
             sound: true,
+            backend: def_spell_backend(),
+            lt_url: def_empty(),
+            llm_cmd: def_empty(),
+            context_chars: def_context_chars(),
         }
     }
 }
@@ -339,6 +365,7 @@ pub enum ConfigInvalid {
     SpellMode { value: String },
     SpellBarPosition { value: String },
     SpellSuggestCount { value: usize },
+    SpellBackend { value: String },
 }
 
 impl std::fmt::Display for ConfigInvalid {
@@ -362,6 +389,12 @@ impl std::fmt::Display for ConfigInvalid {
             }
             ConfigInvalid::SpellSuggestCount { value } => {
                 write!(f, "invalid spell.suggest_count {value} (must be 1..=5)")
+            }
+            ConfigInvalid::SpellBackend { value } => {
+                write!(
+                    f,
+                    "invalid spell.backend '{value}' (expected dict|hybrid|auto)"
+                )
             }
         }
     }
@@ -423,6 +456,11 @@ impl AppConfig {
         if !(1..=5).contains(&self.spell.suggest_count) {
             errs.push(ConfigInvalid::SpellSuggestCount {
                 value: self.spell.suggest_count,
+            });
+        }
+        if !matches!(self.spell.backend.as_str(), "dict" | "hybrid" | "auto") {
+            errs.push(ConfigInvalid::SpellBackend {
+                value: self.spell.backend.clone(),
             });
         }
 

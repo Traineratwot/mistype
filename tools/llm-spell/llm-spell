@@ -1,0 +1,618 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""llm-spell — local spell/typo corrector for SwitchFix hybrid layer.
+
+Protocol (JSON lines on stdin/stdout), matches switchfix ProcessCorrector:
+
+    → {"word":"приветт","context":"всем приветт","lang":"ru"}
+    ← {"suggestions":["привет"],"is_ok":false,"backend":"t5"}
+    ← {"is_ok":true,"backend":"t5"}          # word is fine — veto dict FP
+
+Also accepts plain one-shot:  echo '...' | llm-spell --once
+and prints a ready line on startup:  {"ready":true,"backend":"..."}
+
+Backends (auto-picked, override with --backend / LLM_SPELL_BACKEND):
+  t5        HuggingFace T5 spell model (default for quality)
+  ollama    local Ollama HTTP (qwen2.5:0.5b / llama3.2:1b / …)
+  rules     no ML — edit distance + confusables + hunspell (always works)
+
+Models stay ≤300 MB: t5-small-class (~240 MB fp32) or Q4 GGUF via Ollama.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any, Callable
+
+__version__ = "0.1.0"
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+RU_ALPHA = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
+EN_ALPHA = "abcdefghijklmnopqrstuvwxyz"
+
+# Common one-char confusions (keyboard / phonetic).
+CONFUSABLES = {
+    "ru": {
+        "е": "и", "и": "е", "ё": "о", "о": "ё", "ы": "и", "ь": "ъ", "ъ": "ь",
+        "т": "д", "д": "т", "з": "с", "с": "з", "ж": "ш", "ш": "ж",
+        "ч": "щ", "щ": "ч", "л": "р", "р": "л", "м": "н", "н": "м",
+        "в": "ф", "ф": "в", "к": "х", "г": "к", "б": "п", "п": "б",
+        "у": "ю", "ю": "у",
+    },
+    "en": {
+        "e": "i", "i": "e", "a": "e", "o": "a", "s": "c", "c": "s", "k": "c",
+        "m": "n", "n": "m", "t": "d", "d": "t", "l": "r", "r": "l",
+        "w": "v", "v": "w", "b": "p", "p": "b", "g": "j",
+    },
+}
+
+
+def detect_lang(word: str) -> str:
+    cyr = sum(1 for c in word if "а" <= c.lower() <= "я" or c.lower() == "ё")
+    lat = sum(1 for c in word if c.isascii() and c.isalpha())
+    return "ru" if cyr >= lat else "en"
+
+
+def edit_distance(a: str, b: str) -> int:
+    """Damerau-Levenshtein (transposition = 1) — matches how humans type."""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    la, lb = len(a), len(b)
+    # Full matrix so we can look at i-2/j-2 for transpositions.
+    d = [[0] * (lb + 1) for _ in range(la + 1)]
+    for i in range(la + 1):
+        d[i][0] = i
+    for j in range(lb + 1):
+        d[0][j] = j
+    for i in range(1, la + 1):
+        for j in range(1, lb + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            d[i][j] = min(
+                d[i - 1][j] + 1,       # delete
+                d[i][j - 1] + 1,       # insert
+                d[i - 1][j - 1] + cost,  # sub/match
+            )
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                d[i][j] = min(d[i][j], d[i - 2][j - 2] + 1)  # transpose
+    return d[la][lb]
+
+
+# Compact high-frequency words — ranking boost only (not a full dictionary).
+COMMON_EN = set(
+    """
+    the be to of and a in that have i it for not on with he as you do at this but his by
+    from they we say her she or an will my one all would there their what so up out if
+    about who get which go me when make can like time no just him know take people into
+    year your good some could them see other than then now look only come its over think
+    also back after use two how our work first well way even new want because any these
+    give day most us hello world please thanks yes no is are was were been being am
+    said says very much more most such each both few many own same so than too very
+    just also only still yet already again once twice here where why how all any both
+    each few more most other some such no nor not only own same so than too very can
+    will just don should now
+    """.split()
+)
+COMMON_RU = set(
+    """
+    и в не я что на он с как это а то все она так его но да ты к у же вы за бы по ее мне
+    было вот от меня еще нет о из ему теперь когда даже ну ли если уже или ни быть был
+    него до вас нибудь опять уж вам сказал себя ей может они тут где есть надо ней для
+    мы тебя их чем была сам чтоб без будто себе под ж будет тогда кто этот того потому
+    этого какой совсем ним здесь этом один почти мой тем чтобы нее сейчас были куда
+    зачем всех никогда можно при наконец два об другой хоть после над больше тот через
+    эти нас про всего них какая много разве три эту моя впрочем хорошо свою этой перед
+    иногда лучше лучше том нельзя такой им более всегда конечно всю между
+    """.split()
+)
+
+
+def edit1(word: str, alphabet: str) -> list[str]:
+    """Full edit-1 neighborhood (delete / transpose / replace / insert)."""
+    n = len(word)
+    if n < 3 or n > 12:
+        return []
+    out: list[str] = []
+    seen = set()
+
+    def add(s: str) -> None:
+        if s and s != word and s not in seen:
+            seen.add(s)
+            out.append(s)
+
+    for i in range(n):
+        add(word[:i] + word[i + 1 :])
+    for i in range(n - 1):
+        add(word[:i] + word[i + 1] + word[i] + word[i + 2 :])
+    for i in range(n):
+        for c in alphabet:
+            if c != word[i]:
+                add(word[:i] + c + word[i + 1 :])
+    for i in range(n + 1):
+        for c in alphabet:
+            add(word[:i] + c + word[i:])
+    for i in range(1, n):
+        if word[i] == word[i - 1]:
+            add(word[:i] + word[i + 1 :])
+    return out
+
+
+def confusables(word: str, lang: str) -> list[str]:
+    pairs = CONFUSABLES.get(lang, CONFUSABLES["en"])
+    out: list[str] = []
+    for i, ch in enumerate(word):
+        for a, b in pairs.items():
+            rep = b if ch == a else (a if ch == b else None)
+            if rep and rep != ch:
+                cand = word[:i] + rep + word[i + 1 :]
+                if cand not in out:
+                    out.append(cand)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Word lists (hunspell stems + optional user file)
+# ---------------------------------------------------------------------------
+
+
+def load_hunspell_stems(lang: str, limit: int = 80_000) -> set[str]:
+    stems: set[str] = set()
+    candidates = {
+        "ru": ["ru_RU", "ru"],
+        "en": ["en_US", "en_GB", "en"],
+    }.get(lang, [lang])
+    root = Path("/usr/share/hunspell")
+    for stem in candidates:
+        dic = root / f"{stem}.dic"
+        if not dic.is_file():
+            continue
+        try:
+            text = dic.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for i, line in enumerate(text.splitlines()):
+            if i == 0 and line.strip().isdigit():
+                continue
+            w = line.split("/")[0].split()[0].strip().lower() if line.strip() else ""
+            if w and not w.startswith("#"):
+                stems.add(w)
+            if len(stems) >= limit:
+                break
+        if stems:
+            break
+    return stems
+
+
+class WordBank:
+    """Lazy per-language stem bank (hunspell + optional extra file)."""
+
+    def __init__(self) -> None:
+        self._cache: dict[str, set[str]] = {}
+
+    def get(self, lang: str) -> set[str]:
+        if lang not in self._cache:
+            stems = load_hunspell_stems(lang)
+            extra = os.environ.get("LLM_SPELL_WORDLIST")
+            if extra and Path(extra).is_file():
+                try:
+                    for line in Path(extra).read_text(encoding="utf-8").splitlines():
+                        w = line.strip().lower()
+                        if w and not w.startswith("#"):
+                            stems.add(w)
+                except OSError:
+                    pass
+            self._cache[lang] = stems
+        return self._cache[lang]
+
+
+# ---------------------------------------------------------------------------
+# Backend: rules (always available)
+# ---------------------------------------------------------------------------
+
+
+class RulesBackend:
+    name = "rules"
+
+    def __init__(self) -> None:
+        self.words = WordBank()
+
+    def correct(self, word: str, context: str, lang: str) -> dict[str, Any]:
+        w = word.strip()
+        if len(w) < 3:
+            return {"is_ok": True, "backend": self.name}
+        lang = lang or detect_lang(w)
+        bank = self.words.get(lang)
+        alpha = RU_ALPHA if lang == "ru" else EN_ALPHA
+
+        wl = w.lower()
+        if bank and wl in bank:
+            return {"is_ok": True, "backend": self.name}
+
+        # Morphology soft-pass: common Russian endings look valid even if
+        # hunspell stems miss the inflected form.
+        if lang == "ru" and re.search(
+            r"(?:ся|сь|ть|ет|ут|ют|ал|ил|ыл|ый|ой|ая|ое|ые|их|ым|ом|у|ю|я|е|ы|и|а|о)$",
+            wl,
+        ) and len(wl) >= 5:
+            # Still try to fix if there is a very close known word (dist 1).
+            close = self._closest(wl, bank, alpha, max_dist=1, limit=3)
+            if not close:
+                return {"is_ok": True, "backend": self.name}
+
+        cands = self._closest(wl, bank, alpha, max_dist=2, limit=5)
+        if not cands:
+            # No dictionary — still offer keyboard-ish fixes vs empty.
+            return {"is_ok": False, "suggestions": [], "backend": self.name}
+        return {"is_ok": False, "suggestions": cands, "backend": self.name}
+
+    def _closest(
+        self,
+        word: str,
+        bank: set[str],
+        alpha: str,
+        max_dist: int,
+        limit: int,
+    ) -> list[str]:
+        if not bank:
+            return []
+        pool: list[str] = []
+        for cand in edit1(word, alpha) + confusables(word, detect_lang(word)):
+            if cand.lower() in bank:
+                pool.append(cand)
+        # Also scan a prefix window of the bank for dist-2 when the word is short.
+        if not pool and len(word) <= 6:
+            pref = word[:2]
+            for s in bank:
+                if s.startswith(pref) and edit_distance(word, s) <= max_dist:
+                    pool.append(s)
+        # Rank: closer edit first, then common words, then longer shared prefix
+        # (`helo`→`hello` beats `halo`), then same-or-longer (missing-letter typos).
+        common = COMMON_RU if detect_lang(word) == "ru" else COMMON_EN
+
+        def rank_key(s: str) -> tuple:
+            d = edit_distance(word, s)
+            pref = 0
+            for a, b in zip(word, s):
+                if a != b:
+                    break
+                pref += 1
+            # Double-letter completion (`helo`→`hello`, `приветт`→`привет`).
+            dbl = 0
+            if len(s) == len(word) + 1:
+                for i in range(1, len(s)):
+                    if s[i] == s[i - 1] and s[:i] + s[i + 1 :] == word:
+                        dbl = 1
+                        break
+            freq = 0 if s.lower() in common else 1
+            len_pen = 0 if len(s) >= len(word) else 1
+            return (d, freq, -dbl, len_pen, -pref, abs(len(s) - len(word)), s)
+
+        pool.sort(key=rank_key)
+        out: list[str] = []
+        for s in pool:
+            if s not in out:
+                out.append(s)
+            if len(out) >= limit:
+                break
+        return out
+
+
+# ---------------------------------------------------------------------------
+# Backend: transformers T5 (UrukHan/t5-russian-spell / flan-t5-small / …)
+# ---------------------------------------------------------------------------
+
+T5_PROMPT = "Spell correct: "
+
+
+class T5Backend:
+    name = "t5"
+
+    def __init__(self, model_id: str) -> None:
+        self.model_id = model_id
+        self._load()
+
+    def _load(self) -> None:
+        # Heavy imports only when this backend is selected.
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer  # type: ignore
+
+        cache = os.environ.get(
+            "LLM_SPELL_CACHE",
+            str(Path.home() / ".local/share/switchfix/models"),
+        )
+        Path(cache).mkdir(parents=True, exist_ok=True)
+        t0 = time.time()
+        self.tok = AutoTokenizer.from_pretrained(self.model_id, cache_dir=cache)
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(
+            self.model_id, cache_dir=cache
+        )
+        self.model.eval()
+        self.max_in = 128
+        sys.stderr.write(
+            f"[llm-spell] t5 model '{self.model_id}' ready in {time.time() - t0:.1f}s\n"
+        )
+
+    def correct(self, word: str, context: str, lang: str) -> dict[str, Any]:
+        phrase = f"{context} {word}".strip() if context else word
+        enc = self.tok(
+            T5_PROMPT + phrase,
+            return_tensors="pt",
+            truncation=True,
+            max_length=self.max_in,
+        )
+        out_ids = self.model.generate(
+            **enc,
+            max_new_tokens=min(48, len(phrase) + 8),
+            num_beams=2,
+            do_sample=False,
+        )
+        fixed = self.tok.decode(out_ids[0], skip_special_tokens=True).strip()
+        return self._diff(word, phrase, fixed)
+
+    def _diff(self, word: str, phrase: str, fixed: str) -> dict[str, Any]:
+        # Prefer a single-word fix when the phrase maps 1:1.
+        if not fixed:
+            return {"is_ok": False, "suggestions": [], "backend": self.name}
+        # Case-normalized compare of whole phrase.
+        if fixed.lower() == phrase.lower():
+            return {"is_ok": True, "backend": self.name}
+
+        # Try to extract the word-level replacement: find word in fixed by
+        # aligning tokens of phrase vs fixed (whitespace).
+        p_toks = phrase.split()
+        f_toks = fixed.split()
+        if len(p_toks) == len(f_toks):
+            for pt, ft in zip(p_toks, f_toks):
+                if pt == word and ft.lower() != word.lower():
+                    return {
+                        "is_ok": False,
+                        "suggestions": [ft.strip(".,!?;:«»\"'")],
+                        "backend": self.name,
+                        "confidence": 0.9,
+                    }
+                if pt == word and ft.lower() == word.lower():
+                    return {"is_ok": True, "backend": self.name}
+
+        # Fallback: if fixed is a single token, treat it as the word fix.
+        if len(f_toks) == 1:
+            cand = f_toks[0].strip(".,!?;:«»\"'")
+            if cand and cand.lower() != word.lower():
+                return {
+                    "is_ok": False,
+                    "suggestions": [cand],
+                    "backend": self.name,
+                    "confidence": 0.8,
+                }
+            return {"is_ok": True, "backend": self.name}
+
+        # Whole-phrase rewrite — do not auto-apply, just report the changed word.
+        for pt, ft in zip(p_toks, f_toks):
+            if pt != ft and pt.lower() == word.lower():
+                return {
+                    "is_ok": False,
+                    "suggestions": [ft.strip(".,!?;:«»\"'")],
+                    "backend": self.name,
+                    "confidence": 0.7,
+                }
+        return {"is_ok": False, "suggestions": [], "backend": self.name}
+
+
+# ---------------------------------------------------------------------------
+# Backend: Ollama HTTP
+# ---------------------------------------------------------------------------
+
+
+class OllamaBackend:
+    name = "ollama"
+
+    def __init__(self, model: str, host: str | None = None) -> None:
+        self.model = model
+        self.host = (host or os.environ.get("OLLAMA_HOST") or "http://127.0.0.1:11434").rstrip(
+            "/"
+        )
+        self._ping()
+
+    def _ping(self) -> None:
+        try:
+            with urllib.request.urlopen(self.host + "/api/tags", timeout=2) as r:
+                data = json.loads(r.read().decode())
+            names = [m.get("name", "") for m in data.get("models", [])]
+            base = {n.split(":")[0] for n in names}
+            if self.model not in names and self.model.split(":")[0] not in base:
+                sys.stderr.write(
+                    f"[llm-spell] warning: ollama model '{self.model}' not in {names}\n"
+                )
+        except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
+            sys.stderr.write(f"[llm-spell] ollama ping failed: {e}\n")
+
+    def correct(self, word: str, context: str, lang: str) -> dict[str, Any]:
+        prompt = (
+            "You are a spell checker. Fix ONLY spelling/typos of the target word. "
+            "Keep the original wording and meaning. "
+            f"Language: {lang}. Context: {context!r}. Target word: {word!r}.\n"
+            "Reply with a JSON object only: "
+            '{"suggestions": ["corrected"], "is_ok": false} '
+            'or {"is_ok": true} if the word is already correct.'
+        )
+        body = json.dumps(
+            {
+                "model": self.model,
+                "prompt": prompt,
+                "stream": False,
+                "format": "json",
+                "options": {"temperature": 0, "num_predict": 64},
+            }
+        ).encode()
+        req = urllib.request.Request(
+            self.host + "/api/generate",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=8) as r:
+                data = json.loads(r.read().decode())
+        except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
+            sys.stderr.write(f"[llm-spell] ollama generate failed: {e}\n")
+            return {"is_ok": False, "suggestions": [], "backend": self.name}
+        raw = data.get("response", "")
+        return self._parse(raw)
+
+    def _parse(self, raw: str) -> dict[str, Any]:
+        raw = raw.strip()
+        # Model may wrap JSON in prose — grab the first object.
+        m = re.search(r"\{.*\}", raw, re.S)
+        if m:
+            try:
+                obj = json.loads(m.group(0))
+            except json.JSONDecodeError:
+                obj = {}
+            if obj.get("is_ok") is True:
+                return {"is_ok": True, "backend": self.name}
+            sugg = obj.get("suggestions") or obj.get("corrections") or []
+            if isinstance(sugg, str):
+                sugg = [sugg]
+            sugg = [str(s).strip() for s in sugg if str(s).strip()][:5]
+            return {"is_ok": False, "suggestions": sugg, "backend": self.name}
+        # Plain word reply.
+        word = raw.splitlines()[0].strip(".,!?;:«»\"'") if raw else ""
+        if word:
+            return {"is_ok": False, "suggestions": [word], "backend": self.name}
+        return {"is_ok": False, "suggestions": [], "backend": self.name}
+
+
+# ---------------------------------------------------------------------------
+# Backend selection
+# ---------------------------------------------------------------------------
+
+
+def pick_backend(kind: str = "auto") -> Any:
+    kind = (kind or "auto").lower()
+    model = os.environ.get("LLM_SPELL_MODEL", "UrukHan/t5-russian-spell")
+    ollama_model = os.environ.get("LLM_SPELL_OLLAMA_MODEL", "qwen2.5:0.5b")
+
+    if kind == "rules":
+        return RulesBackend()
+    if kind == "t5":
+        return T5Backend(model)
+    if kind == "ollama":
+        return OllamaBackend(ollama_model)
+
+    # auto: t5 → ollama → rules
+    try:
+        return T5Backend(model)
+    except Exception as e:  # noqa: BLE001 — optional heavy dep
+        sys.stderr.write(f"[llm-spell] t5 unavailable ({e})\n")
+    try:
+        return OllamaBackend(ollama_model)
+    except Exception as e:  # noqa: BLE001
+        sys.stderr.write(f"[llm-spell] ollama unavailable ({e})\n")
+    sys.stderr.write("[llm-spell] using rules backend\n")
+    return RulesBackend()
+
+
+# ---------------------------------------------------------------------------
+# Server loop (JSON lines) / one-shot
+# ---------------------------------------------------------------------------
+
+
+def handle(backend: Any, req: dict[str, Any]) -> dict[str, Any]:
+    word = str(req.get("word") or "")
+    context = str(req.get("context") or "")
+    lang = str(req.get("lang") or detect_lang(word))
+    if not word.strip():
+        return {"is_ok": True, "backend": getattr(backend, "name", "?")}
+    try:
+        out = backend.correct(word, context, lang)
+    except Exception as e:  # noqa: BLE001 — never kill the daemon loop
+        sys.stderr.write(f"[llm-spell] correct failed: {e}\n")
+        return {"is_ok": False, "suggestions": [], "backend": getattr(backend, "name", "?")}
+    out.setdefault("backend", getattr(backend, "name", "?"))
+    # Normalize: ensure suggestions is a list of str.
+    if "suggestions" in out and not isinstance(out["suggestions"], list):
+        out["suggestions"] = [str(out["suggestions"])]
+    out["suggestions"] = [str(s) for s in out.get("suggestions") or [] if str(s).strip()]
+    return out
+
+
+def serve(backend: Any) -> None:
+    # Handshake so ProcessCorrector / ops can see the backend.
+    print(json.dumps({"ready": True, "backend": getattr(backend, "name", "?"), "version": __version__}, ensure_ascii=False), flush=True)
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        if line in ("quit", "exit"):
+            break
+        try:
+            req = json.loads(line)
+        except json.JSONDecodeError:
+            # Plain word as a bare line.
+            req = {"word": line}
+        out = handle(backend, req)
+        print(json.dumps(out, ensure_ascii=False), flush=True)
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="llm-spell",
+        description="Local spell corrector for SwitchFix (JSON-lines protocol)",
+    )
+    ap.add_argument(
+        "--backend",
+        default=os.environ.get("LLM_SPELL_BACKEND", "auto"),
+        choices=["auto", "t5", "ollama", "rules"],
+        help="which engine to use (default: auto)",
+    )
+    ap.add_argument(
+        "--once",
+        action="store_true",
+        help="read a single JSON request from stdin and exit (no ready line)",
+    )
+    ap.add_argument("--word", help="one-shot: word to correct")
+    ap.add_argument("--context", default="", help="one-shot: surrounding text")
+    ap.add_argument("--lang", default="", help="one-shot: ru|en")
+    ap.add_argument("--version", action="version", version=f"llm-spell {__version__}")
+    args = ap.parse_args(argv)
+
+    backend = pick_backend(args.backend)
+
+    if args.word is not None:
+        out = handle(
+            backend,
+            {"word": args.word, "context": args.context, "lang": args.lang},
+        )
+        print(json.dumps(out, ensure_ascii=False))
+        return 0
+
+    if args.once:
+        raw = sys.stdin.read()
+        try:
+            req = json.loads(raw) if raw.strip() else {}
+        except json.JSONDecodeError:
+            req = {"word": raw.strip()}
+        print(json.dumps(handle(backend, req), ensure_ascii=False), flush=True)
+        return 0
+
+    serve(backend)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        raise SystemExit(0)
