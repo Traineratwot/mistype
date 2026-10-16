@@ -1,0 +1,6 @@
+Origin: SwitchFix
+Label: SwitchFix
+Architectures: amd64 arm64
+Description: SwitchFix apt repository
+Suite: stable
+Codename: stable
