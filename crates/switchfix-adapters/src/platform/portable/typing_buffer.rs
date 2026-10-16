@@ -113,6 +113,19 @@ impl SharedTypingBuffer {
         Self::peek_word_locked(&g, false)
     }
 
+    /// Replace buffer contents silently (no WordEvent). Keeps the next
+    /// separator from completing a word we already replaced.
+    pub fn set_contents(&self, text: &str) {
+        let mut g = self.chars.lock().unwrap();
+        g.clear();
+        for c in text.chars() {
+            if g.len() >= self.max {
+                g.pop_front();
+            }
+            g.push_back(c);
+        }
+    }
+
     pub fn take_last_word(&self) -> Option<WordSpan> {
         if !self.enabled.load(Ordering::SeqCst) {
             return None;
@@ -164,6 +177,9 @@ impl TypingBufferPort for SharedTypingBuffer {
     fn peek_current_word(&self) -> Option<String> {
         SharedTypingBuffer::peek_current_word(self)
     }
+    fn set_contents(&self, text: &str) {
+        SharedTypingBuffer::set_contents(self, text);
+    }
     fn word_events(&self) -> broadcast::Receiver<WordEvent> {
         self.word_tx.subscribe()
     }
@@ -214,5 +230,27 @@ mod tests {
             b.push(c);
         }
         assert_eq!(b.peek_current_word().as_deref(), Some("wor"));
+    }
+
+    #[test]
+    fn set_contents_replaces_silently() {
+        let b = SharedTypingBuffer::new(64, true);
+        let mut rx = b.word_events();
+        for c in "приветт ".chars() {
+            b.push(c);
+        }
+        while rx.try_recv().is_ok() {}
+        b.set_contents("привет ");
+        // No new events.
+        assert!(rx.try_recv().is_err());
+        // Next separator must NOT re-complete "приветт".
+        b.push(' ');
+        let mut got = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let WordEvent::Completed { word, .. } = ev {
+                got = Some(word.text);
+            }
+        }
+        assert_eq!(got.as_deref(), Some("привет"));
     }
 }

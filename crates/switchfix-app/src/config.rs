@@ -84,6 +84,13 @@ pub struct Hotkeys {
     pub toggle_enabled: String,
     #[serde(default = "hk_fix_spelling")]
     pub fix_spelling: String,
+    /// Accept Nth suggestion while the bar is visible (max 3).
+    #[serde(default = "hk_accept1")]
+    pub accept_suggestion_1: String,
+    #[serde(default = "hk_accept2")]
+    pub accept_suggestion_2: String,
+    #[serde(default = "hk_accept3")]
+    pub accept_suggestion_3: String,
     #[serde(default = "def_false")]
     pub use_portal_hotkeys: bool,
     /// Fully consume hotkeys (EVIOCGRAB): the bound key does not reach apps.
@@ -93,13 +100,23 @@ pub struct Hotkeys {
 }
 
 fn hk_sel() -> String {
-    "ctrl+f1".into()
+    // Ctrl+Alt+R — convert (replace) wrong-layout text. Avoids Ctrl+1 tab switching.
+    "ctrl+alt+r".into()
 }
 fn hk_toggle() -> String {
-    "ctrl+pause".into()
+    "ctrl+alt+t".into()
 }
 fn hk_fix_spelling() -> String {
-    "ctrl+f2".into()
+    "ctrl+alt+f".into()
+}
+fn hk_accept1() -> String {
+    "ctrl+alt+1".into()
+}
+fn hk_accept2() -> String {
+    "ctrl+alt+2".into()
+}
+fn hk_accept3() -> String {
+    "ctrl+alt+3".into()
 }
 
 impl Default for Hotkeys {
@@ -108,6 +125,9 @@ impl Default for Hotkeys {
             convert_selection: hk_sel(),
             toggle_enabled: hk_toggle(),
             fix_spelling: hk_fix_spelling(),
+            accept_suggestion_1: hk_accept1(),
+            accept_suggestion_2: hk_accept2(),
+            accept_suggestion_3: hk_accept3(),
             use_portal_hotkeys: false,
             hotkey_consume: true,
         }

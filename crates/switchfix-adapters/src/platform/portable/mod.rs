@@ -17,8 +17,9 @@ pub use log_notifier::LogNotifier;
 pub use maps::{load_conversion_set, seed_default_maps, user_maps_dir};
 pub use manual_hotkeys::ManualHotkeySource;
 pub use suggestion_state::{
-    suggest_cmd_path, suggest_state_path, NullSuggestionPresenter, SharedSuggestionPresenter,
-    SuggestionState,
+    clear_daemon_heartbeat, daemon_heartbeat_path, read_daemon_heartbeat, suggest_cmd_path,
+    suggest_state_path, write_daemon_heartbeat, DaemonHeartbeat, NullSuggestionPresenter,
+    SharedSuggestionPresenter, SuggestionState,
 };
 pub use typing_buffer::SharedTypingBuffer;
 pub use zspell_dict::ZspellDictionary;

@@ -49,22 +49,28 @@ pub(crate) fn parse_hotkey_bindings(
 
 /// Dynamic accept chords used while the suggestion bar is visible.
 ///
-/// `Ctrl+1..=suggest_count` accept a slot, `Ctrl+0` adds to the dictionary,
-/// `Ctrl+period` dismisses the bar. These are NOT config bindings — they are
-/// only matched while `bar_visible` is set so apps keep their Ctrl+1 otherwise.
-pub(crate) fn dynamic_suggestion_bindings(suggest_count: usize) -> Vec<(HotkeyBinding, HotkeyEvent)> {
+/// Bound via `hotkeys.accept_suggestion_1..=3` (max 3 slots). Matched only
+/// while `bar_visible` is set so apps keep their normal shortcuts otherwise.
+pub(crate) fn dynamic_suggestion_bindings(cfg: &AppConfig) -> Vec<(HotkeyBinding, HotkeyEvent)> {
     let mut out = Vec::new();
-    let n = suggest_count.clamp(1, 5);
-    for i in 1..=n {
-        let key = i.to_string();
-        if let Some(b) = HotkeyBinding::parse(&format!("ctrl+{key}")) {
-            out.push((b, HotkeyEvent::AcceptSuggestion(i as u8)));
+    let slots = [
+        (cfg.hotkeys.accept_suggestion_1.as_str(), 1u8),
+        (cfg.hotkeys.accept_suggestion_2.as_str(), 2),
+        (cfg.hotkeys.accept_suggestion_3.as_str(), 3),
+    ];
+    for (s, n) in slots {
+        if s.trim().is_empty() {
+            continue;
+        }
+        match HotkeyBinding::parse(s) {
+            Some(b) => out.push((b, HotkeyEvent::AcceptSuggestion(n))),
+            None => warn!("invalid accept hotkey {n}: {s:?}"),
         }
     }
-    if let Some(b) = HotkeyBinding::parse("ctrl+0") {
+    if let Some(b) = HotkeyBinding::parse("ctrl+alt+0") {
         out.push((b, HotkeyEvent::AddToDictionary));
     }
-    if let Some(b) = HotkeyBinding::parse("ctrl+period") {
+    if let Some(b) = HotkeyBinding::parse("ctrl+alt+period") {
         out.push((b, HotkeyEvent::DismissSuggestions));
     }
     out
@@ -87,8 +93,31 @@ mod tests {
 
     #[test]
     fn dynamic_suggestion_bindings_cover_slots() {
-        let parsed = dynamic_suggestion_bindings(3);
-        // ctrl+1, ctrl+2, ctrl+3, ctrl+0, ctrl+period
+        let cfg = AppConfig::default();
+        let parsed = dynamic_suggestion_bindings(&cfg);
+        // accept 1..3 + learn + dismiss
         assert_eq!(parsed.len(), 5);
+        assert!(parsed
+            .iter()
+            .any(|(b, e)| b.key == "1" && b.ctrl && b.alt
+                && matches!(e, HotkeyEvent::AcceptSuggestion(1))));
+    }
+
+    #[test]
+    fn dynamic_suggestion_bindings_respect_custom_and_empty() {
+        let mut cfg = AppConfig::default();
+        cfg.hotkeys.accept_suggestion_1 = "ctrl+f1".into();
+        cfg.hotkeys.accept_suggestion_2 = String::new();
+        cfg.hotkeys.accept_suggestion_3 = "ctrl+f3".into();
+        let parsed = dynamic_suggestion_bindings(&cfg);
+        assert!(parsed
+            .iter()
+            .any(|(b, e)| b.key == "f1" && matches!(e, HotkeyEvent::AcceptSuggestion(1))));
+        assert!(parsed
+            .iter()
+            .any(|(b, e)| b.key == "f3" && matches!(e, HotkeyEvent::AcceptSuggestion(3))));
+        assert!(!parsed
+            .iter()
+            .any(|(_, e)| matches!(e, HotkeyEvent::AcceptSuggestion(2))));
     }
 }

@@ -141,6 +141,19 @@ pub trait TextInjector: Send + Sync {
     /// Type `text` as if the user pressed keys producing these chars in `layout`.
     async fn type_text(&self, text: &str, layout: &LayoutId) -> Result<(), InjectError>;
     async fn chord(&self, combo: KeyChord) -> Result<(), InjectError>;
+    /// Move the text cursor left `count` characters (no erase).
+    /// Used so a word replace never eats the separator before the word.
+    async fn cursor_left(&self, count: usize) -> Result<(), InjectError> {
+        let _ = count;
+        Ok(())
+    }
+    /// Move the text cursor right `count` characters (no erase).
+    /// After a replace the cursor must end up *after* the trailing
+    /// separator so the next typed key is not glued to the replacement.
+    async fn cursor_right(&self, count: usize) -> Result<(), InjectError> {
+        let _ = count;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -168,6 +181,12 @@ pub trait TypingBufferPort: Send + Sync {
     /// Current in-progress word (after the last separator), without consuming.
     fn peek_current_word(&self) -> Option<String> {
         None
+    }
+    /// Overwrite the buffer contents **without** emitting word events.
+    /// Used after we inject a replacement so the next Space doesn't
+    /// re-complete the old word and trigger a second replace.
+    fn set_contents(&self, text: &str) {
+        let _ = text;
     }
     /// Stream of word-boundary / fragment events.
     fn word_events(&self) -> broadcast::Receiver<WordEvent> {

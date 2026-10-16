@@ -6,9 +6,10 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use switchfix_domain::{
-    convert, detect_lang, is_auto_fixable, one_step_neighbors, preserve_case, rank, should_check,
+    convert, detect_lang, one_step_neighbors, preserve_case, rank, should_auto_apply, should_check,
     ConversionSet, Suggestion, SuggestionKind,
 };
 use tokio::sync::watch;
@@ -60,6 +61,13 @@ pub struct SpellService {
     pending: Mutex<Option<Pending>>,
     /// Last completed word — used by the `FixSpelling` hotkey.
     last_word: Mutex<Option<(String, usize, char)>>,
+    /// Ignore word events while we inject a replacement (they are our own keys).
+    suppress: AtomicBool,
+    /// After a replace, block auto-replace until the user types a new word.
+    /// Prevents "Space → replace → Space → replace again" on a stale buffer.
+    auto_block: AtomicBool,
+    /// When the last replace happened (for logs / future debounce).
+    last_replace: Mutex<Option<Instant>>,
 }
 
 impl SpellService {
@@ -97,6 +105,9 @@ impl SpellService {
             enabled: AtomicBool::new(enabled),
             pending: Mutex::new(None),
             last_word: Mutex::new(None),
+            suppress: AtomicBool::new(false),
+            auto_block: AtomicBool::new(false),
+            last_replace: Mutex::new(None),
         }
     }
 
@@ -119,23 +130,41 @@ impl SpellService {
 
     /// Feed a typing-buffer event.
     pub async fn on_word_event(&self, ev: WordEvent) -> SpellAction {
+        if self.suppress.load(Ordering::SeqCst) {
+            debug!("spell skip: suppressed (injected keys)");
+            return SpellAction::None;
+        }
         if !self.is_enabled() {
+            debug!("spell skip: service disabled (toggle)");
             return SpellAction::None;
         }
         let cfg = self.config.borrow().clone();
         if !cfg.spell.enabled || cfg.spell.mode == "off" {
+            debug!(
+                "spell skip: config enabled={} mode={}",
+                cfg.spell.enabled, cfg.spell.mode
+            );
             return SpellAction::None;
         }
         if self.should_skip_focus(&cfg).await {
+            debug!("spell skip: excluded app / fullscreen");
             return SpellAction::None;
         }
 
         match ev {
             WordEvent::Completed { word, separator } => {
+                debug!("word completed: {:?} sep={:?}", word.text, separator);
                 self.on_word_completed(word.text, word.char_len, separator, &cfg)
                     .await
             }
-            WordEvent::Updated(frag) => self.on_fragment_updated(frag, &cfg).await,
+            WordEvent::Updated(frag) => {
+                // Real typing (not our inject) re-arms auto-replace.
+                if !frag.is_empty() {
+                    self.auto_block.store(false, Ordering::SeqCst);
+                }
+                debug!("word fragment: {:?}", frag);
+                self.on_fragment_updated(frag, &cfg).await
+            }
         }
     }
 
@@ -150,10 +179,12 @@ impl SpellService {
         }
 
         // Prefer the stored completed word; fall back to the buffer fragment.
+        // `erase_len` is the word only — trailing separator is stepped over,
+        // never deleted (and the space before the word is never touched).
         let (word, erase_len, trailing) = {
             let last = self.last_word.lock().unwrap().clone();
             if let Some((w, len, sep)) = last {
-                (w, len + 1, sep.to_string())
+                (w, len, sep.to_string())
             } else {
                 // Fragment still being typed: erase just the fragment, no separator.
                 match self.buffer.peek_current_word() {
@@ -254,30 +285,55 @@ impl SpellService {
         *self.last_word.lock().unwrap() = Some((word.clone(), char_len, separator));
 
         if !should_check(&word, cfg.spell.min_word_len) {
+            debug!("spell skip word {:?}: should_check=false (min_len={})", word, cfg.spell.min_word_len);
             let _ = self.dismiss_if_showing().await;
             return SpellAction::None;
         }
 
         let Some(candidates) = self.candidates_for(&word, cfg, false) else {
+            debug!("spell skip word {:?}: candidates_for=None (lang/config/correct)", word);
             let _ = self.dismiss_if_showing().await;
             return SpellAction::None;
         };
         if candidates.is_empty() {
+            debug!("spell skip word {:?}: no candidates", word);
             let _ = self.dismiss_if_showing().await;
             return SpellAction::None;
         }
 
         let ranked = rank(&word, candidates);
         let mode = cfg.spell.mode.as_str();
+        debug!(
+            "spell word {:?} mode={} ranked={:?}",
+            word,
+            mode,
+            ranked.iter().map(|s| s.text.as_str()).collect::<Vec<_>>()
+        );
 
-        if mode == "auto" && is_auto_fixable(&ranked, &word, cfg.spell.auto_fix_min_len) {
-            let top = &ranked[0];
-            let replacement = preserve_case(&word, &top.text);
-            *self.pending.lock().unwrap() = None;
-            let _ = self.presenter.hide().await;
-            return self
-                .apply_replace(&word, &replacement, char_len + 1, &separator.to_string())
-                .await;
+        // Auto mode: apply the top candidate as soon as the word is finished
+        // (space / punctuation) when the fix is high-confidence.
+        // Never two auto-replaces in a row — wait for the user to type again.
+        if mode == "auto" {
+            if self.auto_block.load(Ordering::SeqCst) {
+                debug!("spell auto: blocked (previous replace, wait for typing)");
+                return SpellAction::None;
+            }
+            if should_auto_apply(&ranked, &word, cfg.spell.auto_fix_min_len) {
+                let top = &ranked[0];
+                let replacement = preserve_case(&word, &top.text);
+                debug!("spell auto-fix {:?} -> {:?}", word, replacement);
+                *self.pending.lock().unwrap() = None;
+                let _ = self.presenter.hide().await;
+                // Word only; the Space the user pressed stays after the word.
+                return self
+                    .apply_replace(&word, &replacement, char_len, &separator.to_string())
+                    .await;
+            }
+            debug!(
+                "spell auto: not auto-applying (candidates={} min_len={}) — showing hints",
+                ranked.len(),
+                cfg.spell.auto_fix_min_len
+            );
         }
 
         if mode == "hotkey" {
@@ -285,8 +341,9 @@ impl SpellService {
             return SpellAction::None;
         }
 
-        // hint (and auto with multiple candidates) → show the bar.
-        self.show_bar(word, char_len + 1, &separator.to_string(), ranked, false, cfg)
+        // hint (and auto with multiple candidates) → show the bar. Never replace.
+        // Word-only erase: the trailing separator stays where the user typed it.
+        self.show_bar(word, char_len, &separator.to_string(), ranked, false, cfg)
             .await
     }
 
@@ -305,8 +362,9 @@ impl SpellService {
             return SpellAction::None;
         }
         let ranked = rank(&frag, candidates);
-        // Completions replace only the fragment (still being typed).
-        self.show_bar(frag, 0, "", ranked, true, cfg).await
+        // Completions: erase only the typed fragment (no trailing separator yet).
+        let frag_len = frag.chars().count();
+        self.show_bar(frag, frag_len, "", ranked, true, cfg).await
     }
 
     /// Build ranked-able candidates for `word`.
@@ -336,6 +394,7 @@ impl SpellService {
         // Correct word → no spell-fix candidates (layout-convert still worth a try
         // only when the word is *incorrect* in its own script).
         if self.spell.is_correct(word, lang) {
+            debug!("word {:?} is correct in '{}', no spell-fix", word, lang);
             return None;
         }
 
@@ -427,22 +486,70 @@ impl SpellService {
             _ => "us",
         });
 
+        // Ignore our own injected keystrokes so they don't re-complete the word.
+        self.suppress.store(true, Ordering::SeqCst);
+
+        // Wait for the completing key (Space / punctuation) to reach the app
+        // before we move the cursor — otherwise we can erase the space *before*
+        // the word.
+        let sep_len = trailing.chars().count();
+        if sep_len > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+            // Cursor sits after `trailing`. Step over it so backspace only
+            // removes the word and never touches the separator (or the space
+            // before the word).
+            if let Err(e) = self.injector.cursor_left(sep_len).await {
+                tracing::warn!("spell replace failed (cursor_left): {e}");
+                self.suppress.store(false, Ordering::SeqCst);
+                return SpellAction::None;
+            }
+        }
+
         if erase_len > 0 {
             if let Err(e) = self.injector.backspace(erase_len).await {
-                debug!("backspace failed: {e}");
+                tracing::warn!("spell replace failed (backspace {erase_len}): {e}");
+                self.suppress.store(false, Ordering::SeqCst);
                 return SpellAction::None;
             }
         }
         if let Err(e) = self.injector.type_text(replacement, &layout).await {
-            debug!("type_text failed: {e}");
+            tracing::warn!("spell replace failed (type {:?}): {e}", replacement);
+            self.suppress.store(false, Ordering::SeqCst);
             return SpellAction::None;
         }
-        if !trailing.is_empty() {
-            let sep_layout = switchfix_domain::LayoutId::new("us");
-            let _ = self.injector.type_text(trailing, &sep_layout).await;
+        // Cursor is now *before* the trailing separator we stepped over.
+        // Move past it so the next keystroke starts a new word — otherwise
+        // the user must press Space again to unstick the caret.
+        if sep_len > 0 {
+            if let Err(e) = self.injector.cursor_right(sep_len).await {
+                tracing::warn!("spell replace failed (cursor_right): {e}");
+            }
         }
 
-        debug!(from = original, to = replacement, "spell replaced");
+        // Sync buffer to what is now on screen — without word events.
+        // `trailing` is still typed after the word (we never deleted it).
+        let mut synced = replacement.to_string();
+        synced.push_str(trailing);
+        self.buffer.set_contents(&synced);
+
+        self.suppress.store(false, Ordering::SeqCst);
+        // One auto-replace per word: wait for new typing before the next.
+        self.auto_block.store(true, Ordering::SeqCst);
+        *self.last_replace.lock().unwrap() = Some(Instant::now());
+        // last_word is now the replacement (Ctrl+Alt+F shouldn't undo us).
+        let char_len = replacement.chars().count();
+        *self.last_word.lock().unwrap() = Some((
+            replacement.to_string(),
+            char_len,
+            trailing.chars().next().unwrap_or(' '),
+        ));
+
+        debug!(
+            from = original,
+            to = replacement,
+            trailing,
+            "spell replaced (word only; separators kept)"
+        );
         SpellAction::Replaced {
             from: original.to_string(),
             to: replacement.to_string(),
@@ -479,6 +586,14 @@ mod tests {
             Ok(())
         }
         async fn chord(&self, _combo: KeyChord) -> Result<(), InjectError> {
+            Ok(())
+        }
+        async fn cursor_left(&self, count: usize) -> Result<(), InjectError> {
+            self.log.lock().unwrap().push(format!("left:{count}"));
+            Ok(())
+        }
+        async fn cursor_right(&self, count: usize) -> Result<(), InjectError> {
+            self.log.lock().unwrap().push(format!("right:{count}"));
             Ok(())
         }
     }
@@ -651,7 +766,33 @@ mod tests {
         );
         assert!(!p.is_visible());
         let log = i.log.lock().unwrap().clone();
-        assert_eq!(log, vec!["bs:8", "type:привет:ru", "type: :us"]);
+        // Step over the trailing space, erase the word only, type replacement,
+        // then step back past the space so the caret is at the end.
+        assert_eq!(log, vec!["left:1", "bs:7", "type:привет:ru", "right:1"]);
+    }
+
+    #[tokio::test]
+    async fn replace_preserves_spaces_around_word() {
+        let (svc, i, _p) = setup("auto");
+        // «приветт» + Space → replace word, keep both surrounding spaces.
+        let action = svc
+            .on_word_event(WordEvent::Completed {
+                word: WordSpan {
+                    text: "приветт".into(),
+                    char_len: 7,
+                },
+                separator: ' ',
+            })
+            .await;
+        assert!(matches!(action, SpellAction::Replaced { .. }));
+        let log = i.log.lock().unwrap().clone();
+        assert_eq!(log[0], "left:1", "must step over trailing space first");
+        assert_eq!(log[1], "bs:7", "erase only the 7-char word");
+        assert_eq!(log[3], "right:1", "caret must end after the space");
+        assert!(
+            !log.iter().any(|l| l == "type: :us"),
+            "must not re-type / invent extra spaces: {log:?}"
+        );
     }
 
     #[tokio::test]
@@ -675,7 +816,9 @@ mod tests {
             }
         );
         let log = i.log.lock().unwrap().clone();
-        assert_eq!(log[1], "type:привет:ru");
+        assert_eq!(log[0], "left:1");
+        assert_eq!(log[1], "bs:6");
+        assert_eq!(log[2], "type:привет:ru");
     }
 
     #[tokio::test]
@@ -699,7 +842,51 @@ mod tests {
         );
         assert!(!p.is_visible());
         let log = i.log.lock().unwrap().clone();
-        assert_eq!(log[0], "bs:8");
+        assert_eq!(log[0], "left:1");
+        assert_eq!(log[1], "bs:7");
+        assert_eq!(log[3], "right:1");
+    }
+
+    #[tokio::test]
+    async fn hint_mode_never_auto_replaces() {
+        let (svc, i, _p) = setup("hint");
+        let action = svc
+            .on_word_event(WordEvent::Completed {
+                word: WordSpan {
+                    text: "приветт".into(),
+                    char_len: 7,
+                },
+                separator: ' ',
+            })
+            .await;
+        // Hints only — no inject.
+        assert_eq!(action, SpellAction::ShowedHints);
+        assert!(i.log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn auto_mode_blocks_second_replace_in_a_row() {
+        let (svc, i, _p) = setup("auto");
+        let ev = || WordEvent::Completed {
+            word: WordSpan {
+                text: "приветт".into(),
+                char_len: 7,
+            },
+            separator: ' ',
+        };
+        let a1 = svc.on_word_event(ev()).await;
+        assert!(matches!(a1, SpellAction::Replaced { .. }));
+        // Second Space on the same word must NOT replace again.
+        let a2 = svc.on_word_event(ev()).await;
+        assert_ne!(a2, SpellAction::Replaced { from: "приветт".into(), to: "привет".into() });
+        let log = i.log.lock().unwrap().clone();
+        // Exactly one backspace+type sequence from the first replace.
+        assert_eq!(log.iter().filter(|l| l.starts_with("bs:")).count(), 1);
+
+        // User types a new word → auto is re-armed.
+        svc.on_word_event(WordEvent::Updated("приветт".into())).await;
+        let a3 = svc.on_word_event(ev()).await;
+        assert!(matches!(a3, SpellAction::Replaced { .. }));
     }
 
     #[tokio::test]

@@ -125,7 +125,7 @@ impl Platform for KdePlatform {
 
         // Hotkeys
         let parsed_bindings = super::parse_hotkey_bindings(cfg);
-        let dynamic_bindings = super::dynamic_suggestion_bindings(cfg.spell.suggest_count);
+        let dynamic_bindings = super::dynamic_suggestion_bindings(cfg);
         let suggestion_state = SuggestionState::new();
         let presenter = SharedSuggestionPresenter::new(suggestion_state);
         let bar_visible = presenter.visible_flag();

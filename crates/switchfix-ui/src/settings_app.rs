@@ -21,8 +21,8 @@ pub struct SettingsApp {
     /// Which hotkey field is currently waiting for a key combination.
     capturing: Option<HotkeyField>,
     /// Forced modifiers per hotkey (checkboxes next to that combo only).
-    mods_selection: HotkeyMods,
-    mods_toggle: HotkeyMods,
+    /// Indexed by `HotkeyField::index()`.
+    mods: [HotkeyMods; HotkeyField::COUNT],
     /// Daemon pause flag written while capturing so hotkeys don't fire.
     paused_for_capture: bool,
 }
@@ -40,6 +40,55 @@ pub struct HotkeyMods {
 pub enum HotkeyField {
     Selection,
     Toggle,
+    FixSpelling,
+    Accept1,
+    Accept2,
+    Accept3,
+}
+
+impl HotkeyField {
+    pub const COUNT: usize = 6;
+    pub const ALL: [HotkeyField; Self::COUNT] = [
+        HotkeyField::Selection,
+        HotkeyField::Toggle,
+        HotkeyField::FixSpelling,
+        HotkeyField::Accept1,
+        HotkeyField::Accept2,
+        HotkeyField::Accept3,
+    ];
+
+    pub fn index(self) -> usize {
+        match self {
+            HotkeyField::Selection => 0,
+            HotkeyField::Toggle => 1,
+            HotkeyField::FixSpelling => 2,
+            HotkeyField::Accept1 => 3,
+            HotkeyField::Accept2 => 4,
+            HotkeyField::Accept3 => 5,
+        }
+    }
+
+    fn get<'a>(self, cfg: &'a AppConfig) -> &'a str {
+        match self {
+            HotkeyField::Selection => &cfg.hotkeys.convert_selection,
+            HotkeyField::Toggle => &cfg.hotkeys.toggle_enabled,
+            HotkeyField::FixSpelling => &cfg.hotkeys.fix_spelling,
+            HotkeyField::Accept1 => &cfg.hotkeys.accept_suggestion_1,
+            HotkeyField::Accept2 => &cfg.hotkeys.accept_suggestion_2,
+            HotkeyField::Accept3 => &cfg.hotkeys.accept_suggestion_3,
+        }
+    }
+
+    fn set(self, cfg: &mut AppConfig, value: String) {
+        match self {
+            HotkeyField::Selection => cfg.hotkeys.convert_selection = value,
+            HotkeyField::Toggle => cfg.hotkeys.toggle_enabled = value,
+            HotkeyField::FixSpelling => cfg.hotkeys.fix_spelling = value,
+            HotkeyField::Accept1 => cfg.hotkeys.accept_suggestion_1 = value,
+            HotkeyField::Accept2 => cfg.hotkeys.accept_suggestion_2 = value,
+            HotkeyField::Accept3 => cfg.hotkeys.accept_suggestion_3 = value,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,15 +163,9 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
                 app.paused_for_capture = true;
             }
             // Seed checkboxes from the current combo so they match the binding.
-            let current = match field {
-                HotkeyField::Selection => app.cfg.hotkeys.convert_selection.clone(),
-                HotkeyField::Toggle => app.cfg.hotkeys.toggle_enabled.clone(),
-            };
+            let current = field.get(&app.cfg).to_string();
             let m = mods_from_combo(&current);
-            match field {
-                HotkeyField::Selection => app.mods_selection = m,
-                HotkeyField::Toggle => app.mods_toggle = m,
-            }
+            app.mods[field.index()] = m;
             app.capturing = Some(field);
             app.status =
                 "Нажмите сочетание… (Esc — сбросить клавишу, кнопка «Отмена» — выйти)".into();
@@ -136,16 +179,8 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
             app.status = "Ввод отменён".into();
         }
         Message::ClearHotkey(field) => {
-            match field {
-                HotkeyField::Selection => {
-                    app.cfg.hotkeys.convert_selection = String::new();
-                    app.mods_selection = HotkeyMods::default();
-                }
-                HotkeyField::Toggle => {
-                    app.cfg.hotkeys.toggle_enabled = String::new();
-                    app.mods_toggle = HotkeyMods::default();
-                }
-            }
+            field.set(&mut app.cfg, String::new());
+            app.mods[field.index()] = HotkeyMods::default();
             app.capturing = None;
             if app.paused_for_capture {
                 write_capture_pause(false);
@@ -154,27 +189,19 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
             app.status = "Клавиша сброшена (действие отключено)".into();
         }
         Message::SetMod(field, key, on) => {
-            let mods = match field {
-                HotkeyField::Selection => &mut app.mods_selection,
-                HotkeyField::Toggle => &mut app.mods_toggle,
-            };
+            let mods = &mut app.mods[field.index()];
             match key {
                 ModKey::Ctrl => mods.ctrl = on,
                 ModKey::Alt => mods.alt = on,
                 ModKey::Shift => mods.shift = on,
                 ModKey::Meta => mods.meta = on,
             }
+            let mods = app.mods[field.index()];
             // Rewrite the stored combo with the same base key + new modifiers.
-            let current = match field {
-                HotkeyField::Selection => app.cfg.hotkeys.convert_selection.clone(),
-                HotkeyField::Toggle => app.cfg.hotkeys.toggle_enabled.clone(),
-            };
+            let current = field.get(&app.cfg).to_string();
             if let Some(base) = combo_base_key(&current) {
-                let combo = combo_from_mods(mods, base);
-                match field {
-                    HotkeyField::Selection => app.cfg.hotkeys.convert_selection = combo.clone(),
-                    HotkeyField::Toggle => app.cfg.hotkeys.toggle_enabled = combo.clone(),
-                }
+                let combo = combo_from_mods(&mods, base);
+                field.set(&mut app.cfg, combo.clone());
                 app.status = format!("Установлено: {}", pretty_hotkey(&combo));
             }
         }
@@ -187,10 +214,7 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
                 return update(app, Message::ClearHotkey(field));
             }
             // Merge this hotkey's checkbox modifiers with live ones.
-            let forced = match field {
-                HotkeyField::Selection => app.mods_selection,
-                HotkeyField::Toggle => app.mods_toggle,
-            };
+            let forced = app.mods[field.index()];
             let mut mods = modifiers;
             if forced.ctrl {
                 mods |= Modifiers::CTRL;
@@ -212,16 +236,10 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
                 }
                 return Task::none();
             };
-            match field {
-                HotkeyField::Selection => app.cfg.hotkeys.convert_selection = combo.clone(),
-                HotkeyField::Toggle => app.cfg.hotkeys.toggle_enabled = combo.clone(),
-            }
+            field.set(&mut app.cfg, combo.clone());
             // Keep checkboxes in sync with what was just bound.
             let m = mods_from_combo(&combo);
-            match field {
-                HotkeyField::Selection => app.mods_selection = m,
-                HotkeyField::Toggle => app.mods_toggle = m,
-            }
+            app.mods[field.index()] = m;
             app.capturing = None;
             if app.paused_for_capture {
                 write_capture_pause(false);
@@ -231,6 +249,7 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
         }
         Message::Save => match app.store.save(&app.cfg) {
             Ok(()) => {
+                write_reload_flag();
                 app.status = "Сохранено. Перезапустите демон, чтобы хоткеи вступили в силу."
                     .into();
                 info!("config saved from settings UI");
@@ -267,8 +286,10 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
             match app.store.load() {
                 Ok(cfg) => {
                     app.cfg = cfg;
-                    app.mods_selection = mods_from_combo(&app.cfg.hotkeys.convert_selection);
-                    app.mods_toggle = mods_from_combo(&app.cfg.hotkeys.toggle_enabled);
+                    for f in HotkeyField::ALL {
+                        let m = mods_from_combo(f.get(&app.cfg));
+                        app.mods[f.index()] = m;
+                    }
                     write_reload_flag();
                     app.status =
                         "Конфигурация перезагружена. Хоткеи — после перезапуска демона.".into();
@@ -631,19 +652,53 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
              Пример: выделить «ghbdtn» → станет «привет». \
              В терминале (konsole, kitty, …) SwitchFix сам очищает строку \
              и вставляет через Ctrl+Shift+V.",
-            &cfg.hotkeys.convert_selection,
+            HotkeyField::Selection.get(cfg),
             HotkeyField::Selection,
             capturing == Some(HotkeyField::Selection),
-            app.mods_selection,
+            app.mods[HotkeyField::Selection.index()],
         ),
         hotkey_row(
             "Пауза / продолжить",
             "Временно выключает SwitchFix: хоткеи не срабатывают, \
              буфер набранных символов очищается. Повторное нажатие включает обратно.",
-            &cfg.hotkeys.toggle_enabled,
+            HotkeyField::Toggle.get(cfg),
             HotkeyField::Toggle,
             capturing == Some(HotkeyField::Toggle),
-            app.mods_toggle,
+            app.mods[HotkeyField::Toggle.index()],
+        ),
+        hotkey_row(
+            "Исправить последнее слово",
+            "Без выделения: берёт последнее набранное слово \
+             и заменяет на лучший вариант (или конвертирует раскладку).",
+            HotkeyField::FixSpelling.get(cfg),
+            HotkeyField::FixSpelling,
+            capturing == Some(HotkeyField::FixSpelling),
+            app.mods[HotkeyField::FixSpelling.index()],
+        ),
+        text("Принять подсказку (пока видна полоса предложений, максимум 3)").size(14),
+        hotkey_row(
+            "Подсказка 1",
+            "Применяет первое (лучшее) предложение из списка.",
+            HotkeyField::Accept1.get(cfg),
+            HotkeyField::Accept1,
+            capturing == Some(HotkeyField::Accept1),
+            app.mods[HotkeyField::Accept1.index()],
+        ),
+        hotkey_row(
+            "Подсказка 2",
+            "Применяет второе предложение.",
+            HotkeyField::Accept2.get(cfg),
+            HotkeyField::Accept2,
+            capturing == Some(HotkeyField::Accept2),
+            app.mods[HotkeyField::Accept2.index()],
+        ),
+        hotkey_row(
+            "Подсказка 3",
+            "Применяет третье предложение.",
+            HotkeyField::Accept3.get(cfg),
+            HotkeyField::Accept3,
+            capturing == Some(HotkeyField::Accept3),
+            app.mods[HotkeyField::Accept3.index()],
         ),
         cancel_btn,
         tooltip(
@@ -774,23 +829,28 @@ pub fn run_settings(
     }
 
     let cfg = store.load().unwrap_or_default();
-    let mods_selection = mods_from_combo(&cfg.hotkeys.convert_selection);
-    let mods_toggle = mods_from_combo(&cfg.hotkeys.toggle_enabled);
+    let mods = [(); HotkeyField::COUNT].map(|_| {
+        // filled below from the live config
+        HotkeyMods::default()
+    });
+    let mut mods = mods;
+    for f in HotkeyField::ALL {
+        mods[f.index()] = mods_from_combo(f.get(&cfg));
+    }
     let app = SettingsApp {
         cfg,
         store,
         config_dir,
         status: String::new(),
         capturing: None,
-        mods_selection,
-        mods_toggle,
+        mods,
         paused_for_capture: false,
     };
 
     iced::application("SwitchFix — настройки", update, view)
         .theme(theme)
         .subscription(subscription)
-        .window_size((580.0, 680.0))
+        .window_size((580.0, 820.0))
         .run_with(move || (app, Task::none()))
 }
 

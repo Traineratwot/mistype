@@ -14,7 +14,7 @@ pub use conversion::{
 pub use error::DomainError;
 pub use spell::{
     detect_lang, edit_distance, is_auto_fixable, one_step_neighbors, preserve_case, rank,
-    should_check, Suggestion, SuggestionKind,
+    should_auto_apply, should_check, Suggestion, SuggestionKind,
 };
 pub use model::{
     CorrectionOutcome, CorrectionRequest, KeyChord, LayoutId, LayoutIndex, LayoutInfo,

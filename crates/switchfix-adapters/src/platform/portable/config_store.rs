@@ -102,6 +102,6 @@ mod tests {
         assert!(!cfg.general.enabled_on_start);
         assert_eq!(cfg.general.language, "en");
         // defaults filled in
-        assert_eq!(cfg.hotkeys.convert_selection, "ctrl+f1");
+        assert_eq!(cfg.hotkeys.convert_selection, "ctrl+alt+r");
     }
 }

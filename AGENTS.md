@@ -59,12 +59,12 @@ sg input -c './target/release/switchfix daemon'
 
 | Action | Default key |
 |--------|-------------|
-| Convert selection | `ctrl+f1` |
-| Fix spelling of last word | `ctrl+f2` |
-| Toggle enabled | `ctrl+pause` |
-| Accept suggestion slot (while bar visible) | `ctrl+1/2/3` |
-| Add word to dictionary (while bar visible) | `ctrl+0` |
-| Dismiss suggestion bar | `ctrl+period` |
+| Convert selection | `ctrl+alt+r` |
+| Fix spelling of last word | `ctrl+alt+f` |
+| Toggle enabled | `ctrl+alt+t` |
+| Accept suggestion slot 1–3 (while bar visible) | `ctrl+alt+1` … `ctrl+alt+3` — **configurable in Settings** |
+| Add word to dictionary (while bar visible) | `ctrl+alt+0` |
+| Dismiss suggestion bar | `ctrl+alt+period` |
 
 The live config may differ (e.g. `insert`) — always check `switchfix doctor`.
 Click-to-capture in Settings UI; Esc cancels. After config change: **restart daemon**.
@@ -194,8 +194,8 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 | **Empty hotkey = disabled** | Esc in Settings clears the binding | `validate()` accepts `""`; `parse_hotkey_bindings` skips empty. |
 | **`HotkeySource::events()` is `take()`** | Second call returns an empty channel | Call once in the daemon loop. Never during `build_services`. |
 | **`key_to_char` maps US physical keys** | Buffer stored Latin (`ghbdtn`) while user typed Russian | Map through `LayoutCharMapper` (current KDE layout + `en_to_ru_map`). |
-| **Accept chords `Ctrl+1/2/3`** | Would steal app shortcuts if always on | evdev matches them **only while** `bar_visible` is true. |
-| **Suggestion UI** | Floating iced window covered other apps | Removed. Use Plasma widget `org.switchfix.suggestions` in the panel, tray menu, or `Ctrl+1..N`. |
+| **Accept chords `Ctrl+Alt+1/2/3`** | `Ctrl+1` steals browser tabs if always on | evdev matches them **only while** `bar_visible` is true. |
+| **Suggestion UI** | Floating iced window covered other apps | Removed. Use Plasma widget `org.switchfix.suggestions` in the panel, tray menu, or `Ctrl+Alt+1..N`. |
 | **`key_name_to_code` returns `evdev::KeyCode`** | Linux type leak | Keep it private to `platform/linux`. |
 | **SharedTypingBuffer ≠ domain `TypingBuffer`** | Duplicate concepts | Live one is adapters `SharedTypingBuffer`. Do not merge casually; `EvdevOptions.buffer` needs concrete type (`push`/`pop`). |
 | **wl-clipboard-rs** | Was a dead dep (arboard is used) | Removed. `wl-copy`/`wl-paste` are invoked as CLI when present; arboard is the library fallback. |
@@ -304,7 +304,8 @@ Watch `RUST_LOG=debug` for `evdev key …` / `hotkey match` / `hotkey received`.
 - `packaging/install.sh`, `packaging/build-deb.sh` → `target/switchfix_0.1.0_amd64.deb`
 - `assets/maps/en2ru.json`, `ru2en.json`, `assets/icons/switchfix.svg`
 
-Docs: `docs/PLAN.md`, `PRIVACY.md`, `SECURITY.md`, `MANUAL-TEST-MATRIX.md`.
+Docs: `docs/PLAN.md`, `PRIVACY.md`, `SECURITY.md`, `MANUAL-TEST-MATRIX.md`,
+`PLASMA6-WIDGETS.md` (plasmoid API + landmines).
 
 ---
 
@@ -349,8 +350,8 @@ If FAIL: `sudo apt install hunspell-ru hunspell-en-us`. (2) `spell.mode` must no
 be `off`. (3) `switchfix spell --text 'приветт'` proves the dictionary path.
 (4) Bar is a separate process — `pgrep -af suggest-bar`.
 
-**Q: `ctrl+f1` doesn't trigger but `insert` does.**  
-A: Your `config.toml` has `convert_selection = "insert"`. `doctor` prints the
+**Q: `ctrl+alt+r` doesn't trigger but `insert` does.**  
+A: Your `config.toml` has a custom `convert_selection`. `doctor` prints the
 live bindings. Defaults ≠ current config.
 
 **Q: How do I know the program received my keypress?**  

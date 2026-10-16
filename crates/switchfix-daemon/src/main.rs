@@ -7,12 +7,15 @@ mod wiring;
 use clap::{Parser, Subcommand};
 use switchfix_domain::CorrectionRequest;
 use switchfix_ui::tray::TrayModel;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
 #[command(name = "switchfix", version, about = "Fix text typed in the wrong keyboard layout")]
 struct Cli {
+    /// Verbose logging (debug) — shows spell/hotkey decisions at runtime.
+    #[arg(short, long, global = true)]
+    verbose: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -68,13 +71,17 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    let default_level = if cli.verbose { "debug" } else { "info" };
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new(default_level)),
         )
         .init();
-
-    let cli = Cli::parse();
+    if cli.verbose {
+        info!("verbose logging on (RUST_LOG overrides if set)");
+    }
 
     match cli.command.unwrap_or(Command::Daemon) {
         Command::Doctor => {
@@ -182,11 +189,20 @@ async fn main() -> anyhow::Result<()> {
             run_spell_cli(&input);
         }
         Command::SuggestPeek => {
-            let path = switchfix_adapters::suggest_state_path();
-            match std::fs::read_to_string(&path) {
-                Ok(json) => println!("{json}"),
-                Err(_) => println!("{{}}"),
-            }
+            // Combined status for the Plasma widget: daemon liveness + tips.
+            let hb = switchfix_adapters::read_daemon_heartbeat();
+            let sug = std::fs::read_to_string(switchfix_adapters::suggest_state_path())
+                .ok()
+                .and_then(|j| serde_json::from_str::<switchfix_app::ports::SuggestionUi>(&j).ok());
+            let json = serde_json::json!({
+                "daemon": hb.is_some(),
+                "enabled": hb.map(|h| h.enabled).unwrap_or(false),
+                "original": sug.as_ref().map(|s| s.original.clone()).unwrap_or_default(),
+                "slots": sug.as_ref().map(|s| s.slots.clone()).unwrap_or_default(),
+                "can_add_to_dict": sug.as_ref().map(|s| s.can_add_to_dict).unwrap_or(false),
+                "timeout_ms": sug.as_ref().map(|s| s.timeout_ms).unwrap_or(0),
+            });
+            println!("{json}");
         }
         Command::SuggestAccept { slot } => {
             write_suggest_cmd(&format!("accept:{slot}")).await;
@@ -399,6 +415,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     let reload_path = std::env::temp_dir().join("switchfix.reload");
     let mut last_reload = std::fs::read_to_string(&reload_path).unwrap_or_default();
     let suggest_cmd_path = switchfix_adapters::platform::portable::suggest_cmd_path();
+    switchfix_adapters::write_daemon_heartbeat(service.is_enabled());
 
     loop {
         tokio::select! {
@@ -425,6 +442,7 @@ async fn run_daemon() -> anyhow::Result<()> {
                                 if let Some(s) = &spell {
                                     s.set_enabled(service.is_enabled());
                                 }
+                                switchfix_adapters::write_daemon_heartbeat(service.is_enabled());
                             }
                             HotkeyEvent::FixSpelling => {
                                 if let Some(s) = &spell {
@@ -480,6 +498,7 @@ async fn run_daemon() -> anyhow::Result<()> {
                 }
             }
             _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
+                switchfix_adapters::write_daemon_heartbeat(service.is_enabled());
                 if let Ok(v) = std::fs::read_to_string(&toggle_path) {
                     if v != last_toggle {
                         last_toggle = v;
@@ -487,6 +506,7 @@ async fn run_daemon() -> anyhow::Result<()> {
                         if let Some(s) = &spell {
                             s.set_enabled(service.is_enabled());
                         }
+                        switchfix_adapters::write_daemon_heartbeat(service.is_enabled());
                     }
                 }
                 // Config / maps reload (settings button or `switchfix reload`).
@@ -548,11 +568,29 @@ async fn run_daemon() -> anyhow::Result<()> {
                         }
                     }
                 }
+
+                // Auto-hide tips after bar_timeout_ms so they don't stick forever.
+                if let Some(s) = &spell {
+                    let timeout = ctx.config_rx.borrow().spell.bar_timeout_ms;
+                    if timeout > 0 {
+                        let path = switchfix_adapters::suggest_state_path();
+                        let expired = std::fs::metadata(&path).ok().and_then(|m| {
+                            m.modified().ok().and_then(|t| t.elapsed().ok())
+                        }).map(|age| age.as_millis() as u64 >= timeout).unwrap_or(false);
+                        if expired {
+                            debug!("suggestion bar timeout ({timeout} ms) — hide");
+                            s.dismiss().await;
+                            tray_refresh();
+                            tray_handle.refresh();
+                        }
+                    }
+                }
             }
         }
     }
 
     tray_handle.abort();
+    switchfix_adapters::clear_daemon_heartbeat();
     info!("daemon stopped");
     Ok(())
 }

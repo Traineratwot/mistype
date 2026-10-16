@@ -177,6 +177,7 @@ const ALL_KEYS: &[KeyCode] = &[
     KeyCode::KEY_SEMICOLON, KeyCode::KEY_APOSTROPHE, KeyCode::KEY_GRAVE, KeyCode::KEY_BACKSLASH,
     KeyCode::KEY_COMMA, KeyCode::KEY_DOT, KeyCode::KEY_SLASH, KeyCode::KEY_SPACE,
     KeyCode::KEY_ENTER, KeyCode::KEY_BACKSPACE, KeyCode::KEY_TAB, KeyCode::KEY_ESC,
+    KeyCode::KEY_LEFT, KeyCode::KEY_RIGHT, KeyCode::KEY_UP, KeyCode::KEY_DOWN,
     KeyCode::KEY_LEFTCTRL, KeyCode::KEY_RIGHTCTRL, KeyCode::KEY_LEFTSHIFT, KeyCode::KEY_RIGHTSHIFT,
     KeyCode::KEY_LEFTALT, KeyCode::KEY_RIGHTALT, KeyCode::KEY_LEFTMETA, KeyCode::KEY_RIGHTMETA,
     KeyCode::KEY_INSERT, KeyCode::KEY_PAUSE,
@@ -187,6 +188,20 @@ impl TextInjector for UinputInjector {
     async fn backspace(&self, count: usize) -> Result<(), InjectError> {
         for _ in 0..count {
             self.tap(KeyCode::KEY_BACKSPACE)?;
+        }
+        Ok(())
+    }
+
+    async fn cursor_left(&self, count: usize) -> Result<(), InjectError> {
+        for _ in 0..count {
+            self.tap(KeyCode::KEY_LEFT)?;
+        }
+        Ok(())
+    }
+
+    async fn cursor_right(&self, count: usize) -> Result<(), InjectError> {
+        for _ in 0..count {
+            self.tap(KeyCode::KEY_RIGHT)?;
         }
         Ok(())
     }

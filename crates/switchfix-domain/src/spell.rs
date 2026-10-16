@@ -147,6 +147,38 @@ pub fn is_auto_fixable(suggestions: &[Suggestion], word: &str, min_len: usize) -
     dist >= 1 && dist <= 2
 }
 
+/// Should we silently replace `word` with `suggestions[0]` right after the
+/// user finishes the word (space / punctuation)?
+///
+/// Stricter about confidence, looser about "only one candidate" than
+/// [`is_auto_fixable`]: layout-convert always wins; a single close edit wins;
+/// with several candidates the top one must be clearly closer (or distance 1).
+pub fn should_auto_apply(suggestions: &[Suggestion], word: &str, min_len: usize) -> bool {
+    let Some(top) = suggestions.first() else {
+        return false;
+    };
+    if top.text == word {
+        return false;
+    }
+    // Wrong-layout word (`ghbdtn` → `привет`) is high confidence.
+    if top.kind == SuggestionKind::LayoutConvert {
+        return true;
+    }
+    if word.chars().count() < min_len {
+        return false;
+    }
+    let dist = edit_distance(word, &top.text);
+    if !(1..=2).contains(&dist) {
+        return false;
+    }
+    if suggestions.len() > 1 {
+        let second = edit_distance(word, &suggestions[1].text);
+        // Prefer an obvious one-key typo over a tie.
+        return dist == 1 || dist < second;
+    }
+    true
+}
+
 /// Order candidates for the suggestion bar.
 ///
 /// Layout-convert first (SwitchFix core), then closer edits, then shorter words
@@ -246,6 +278,28 @@ mod tests {
             "he",
             4
         ));
+    }
+
+    #[test]
+    fn should_auto_apply_takes_close_top_even_with_competing_candidates() {
+        let spell = |t: &str| Suggestion::new(t, SuggestionKind::SpellFix, "приветт");
+        // One-key typo wins even if other candidates exist.
+        assert!(should_auto_apply(
+            &[spell("привет"), spell("привету"), spell("приветы")],
+            "приветт",
+            4
+        ));
+        // Ambiguous two-edit tie does not.
+        assert!(!should_auto_apply(
+            &[spell("abcde"), spell("abcdf")],
+            "abcxx",
+            4
+        ));
+        // Layout convert always applies.
+        let lc = Suggestion::new("привет", SuggestionKind::LayoutConvert, "ghbdtn");
+        assert!(should_auto_apply(&[lc], "ghbdtn", 4));
+        // Too-short spell fixes stay conservative.
+        assert!(!should_auto_apply(&[spell("ab")], "ax", 4));
     }
 
     #[test]

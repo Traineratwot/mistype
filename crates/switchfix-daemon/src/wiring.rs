@@ -111,6 +111,38 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
         info!("spellcheck unavailable (no dictionaries or disabled)");
     }
 
+    // Status dump so the operator can see at a glance what is active.
+    info!("--- SwitchFix status ---");
+    info!(
+        "hotkeys: convert='{}' toggle='{}' fix='{}' consume={}",
+        cfg.hotkeys.convert_selection,
+        cfg.hotkeys.toggle_enabled,
+        cfg.hotkeys.fix_spelling,
+        cfg.hotkeys.hotkey_consume
+    );
+    info!(
+        "spell: enabled={} mode='{}' langs={:?} min_word_len={} suggest_count={} auto_fix_min_len={} sound={}",
+        cfg.spell.enabled,
+        cfg.spell.mode,
+        cfg.spell.languages,
+        cfg.spell.min_word_len,
+        cfg.spell.suggest_count,
+        cfg.spell.auto_fix_min_len,
+        cfg.spell.sound
+    );
+    info!(
+        "typing_buffer={} max_keys={}  layouts.active={:?}",
+        cfg.privacy.typing_buffer, cfg.privacy.typing_buffer_max_keys, cfg.layouts.active
+    );
+    info!(
+        "enabled_on_start={}  fullscreen_guard={}  excluded_apps={:?}",
+        cfg.general.enabled_on_start, cfg.behavior.disable_in_fullscreen, cfg.behavior.excluded_apps
+    );
+    if spell_svc.is_some() {
+        info!("suggestions UI: plasmoid / tray menu / Ctrl+1..N; peek via `switchfix suggest-peek`");
+    }
+    info!("-----------------------");
+
     info!("SwitchFix wired up");
 
     Ok(AppContext {
