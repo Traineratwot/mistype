@@ -23,6 +23,10 @@ pub struct Suggestion {
     pub kind: SuggestionKind,
     /// The original word the candidate replaces.
     pub source_word: String,
+    /// Which hybrid layer produced this candidate:
+    /// `"layout"` | `"dict"` | `"edit1"` | `"context"` (LLM / LanguageTool).
+    #[serde(default)]
+    pub via: String,
 }
 
 impl Suggestion {
@@ -31,7 +35,13 @@ impl Suggestion {
             text: text.into(),
             kind,
             source_word: source_word.into(),
+            via: String::new(),
         }
+    }
+
+    pub fn with_via(mut self, via: impl Into<String>) -> Self {
+        self.via = via.into();
+        self
     }
 }
 

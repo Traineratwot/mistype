@@ -23,13 +23,35 @@ PlasmoidItem {
     readonly property int tipCount: slots.length
     readonly property bool hasTips: tipCount > 0
     readonly property bool canAdd: !!(status && status.can_add_to_dict)
+    readonly property var llm: (status && status.llm) ? status.llm : ({})
+    readonly property var stats: (status && status.stats) ? status.stats : ({})
+    readonly property bool llmConfigured: !!(llm && llm.configured)
+    readonly property string llmName: (llm && llm.name) ? String(llm.name) : ""
+    readonly property var llmOk: (llm && llm.ok !== undefined) ? llm.ok : null
+    readonly property int llmCalls: (llm && llm.calls) ? Number(llm.calls) : 0
+    readonly property int llmErrors: (llm && llm.errors) ? Number(llm.errors) : 0
+    readonly property int stReplaced: (stats && stats.replaced) ? Number(stats.replaced) : 0
+    readonly property int stUndone: (stats && stats.undone) ? Number(stats.undone) : 0
+    readonly property int stHints: (stats && stats.hints) ? Number(stats.hints) : 0
+    readonly property string viaSummary: {
+        if (!stats || !stats.via)
+            return "";
+        var v = stats.via;
+        return "layout " + (v.layout || 0) + " · dict " + (v.dict || 0)
+             + " · edit1 " + (v.edit1 || 0) + " · llm " + (v.context || 0);
+    }
 
     toolTipMainText: daemonRunning
         ? i18n("SwitchFix — %1", enabled ? i18n("работает") : i18n("пауза"))
         : i18n("SwitchFix — демон не запущен")
-    toolTipSubText: hasTips
-        ? i18n("«%1» → %2", original, slots.map(function (s) { return s.text; }).join(", "))
-        : i18n("Подсказок нет. Запустите: switchfix daemon")
+    toolTipSubText: {
+        var llmLine = llmConfigured
+            ? i18n("LLM: %1 (%2 выз., %3 ошиб.)", llmName || "on", llmCalls, llmErrors)
+            : i18n("LLM: выключен");
+        if (hasTips)
+            return i18n("«%1» → %2\n%3", original, slots.map(function (s) { return s.text; }).join(", "), llmLine);
+        return llmLine + "\n" + i18n("Замен: %1 · откатов: %2 · подсказок: %3", stReplaced, stUndone, stHints);
+    }
 
     preferredRepresentation: compactRepresentation
 
@@ -109,6 +131,23 @@ PlasmoidItem {
                     anchors.fill: parent
                     anchors.margins: -6 // easier hit target
                     onClicked: root.expanded = !root.expanded
+                }
+            }
+
+            // LLM backend status chip (tiny).
+            Rectangle {
+                visible: root.llmConfigured
+                width: llmLabel.implicitWidth + 6
+                height: 12
+                radius: 3
+                color: root.llmOk === false ? "#e74c3c" : (root.llmOk === true ? "#2ecc71" : "#888888")
+                Layout.alignment: Qt.AlignVCenter
+                PlasmaComponents.Label {
+                    id: llmLabel
+                    anchors.centerIn: parent
+                    text: root.llmName === "llm" ? "LLM" : (root.llmName || "ctx")
+                    font.pointSize: 7
+                    color: "white"
                 }
             }
 
@@ -216,6 +255,50 @@ PlasmoidItem {
             wrapMode: Text.WordWrap
             opacity: 0.65
             text: i18n("Печатайте с опечаткой или не в той раскладке — список появится здесь.")
+        }
+
+        Kirigami.Separator {
+            Layout.fillWidth: true
+        }
+
+        // LLM / hybrid diagnostics
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 2
+
+            PlasmaComponents.Label {
+                Layout.fillWidth: true
+                text: root.llmConfigured
+                    ? i18n("Движок: %1 — %2", root.llmName || "context",
+                           root.llmOk === false ? i18n("ошибка") : i18n("работает"))
+                    : i18n("Движок: словарь / edit-1 (LLM выключен)")
+                font.bold: true
+                opacity: 0.9
+            }
+            PlasmaComponents.Label {
+                visible: root.llmConfigured
+                Layout.fillWidth: true
+                opacity: 0.7
+                text: i18n("LLM вызовов: %1 · ошибок: %2 · %3 мс",
+                           root.llmCalls, root.llmErrors, (root.llm && root.llm.last_ms) || 0)
+            }
+            PlasmaComponents.Label {
+                Layout.fillWidth: true
+                opacity: 0.7
+                text: i18n("Замен: %1 · откатов: %2 · подсказок: %3",
+                           root.stReplaced, root.stUndone, root.stHints)
+            }
+            PlasmaComponents.Label {
+                visible: root.viaSummary !== ""
+                Layout.fillWidth: true
+                opacity: 0.65
+                text: root.viaSummary
+            }
+            PlasmaComponents.Label {
+                opacity: 0.55
+                font.pointSize: 7
+                text: i18n("История: switchfix spell-stats")
+            }
         }
 
         RowLayout {

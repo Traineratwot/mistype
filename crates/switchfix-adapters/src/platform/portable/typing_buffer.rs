@@ -123,6 +123,10 @@ impl SharedTypingBuffer {
 
     pub fn pop(&self) {
         self.chars.lock().unwrap().pop_back();
+        // Notify spell layer so it can undo a recent auto-replace.
+        if self.enabled.load(Ordering::SeqCst) {
+            let _ = self.word_tx.send(WordEvent::Backspace);
+        }
     }
 
     pub fn clear(&self) {

@@ -118,6 +118,8 @@ pub enum WordEvent {
     },
     /// Characters were added — current in-progress fragment.
     Updated(String),
+    /// Physical Backspace (one character). Used to undo a recent auto-replace.
+    Backspace,
 }
 
 /// Payload for the suggestion bar.

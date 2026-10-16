@@ -105,12 +105,19 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
             cfg.general.enabled_on_start,
         ));
         // Hybrid context layer (LanguageTool / LLM) — optional.
-        if let Some(ctx) = switchfix_adapters::platform::portable::build_context_corrector(
+        match switchfix_adapters::platform::portable::build_context_corrector(
             &cfg.spell.backend,
             &cfg.spell.lt_url,
             &cfg.spell.llm_cmd,
         ) {
-            svc.set_context_corrector(std::sync::Arc::from(ctx));
+            Some(ctx) => {
+                let name = ctx.name();
+                svc.set_context_corrector(std::sync::Arc::from(ctx));
+                svc.set_context_status(true, name);
+            }
+            None => {
+                svc.set_context_status(false, "");
+            }
         }
         svc
     });

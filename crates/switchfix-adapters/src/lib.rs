@@ -9,6 +9,11 @@ pub use platform::portable::{
     DaemonHeartbeat, LayoutCharMapper, NullSuggestionPresenter, SharedSuggestionPresenter,
     SharedTypingBuffer, SuggestionState, ZspellDictionary,
 };
+// Spell status / history live in switchfix-app (no adapters dependency).
+pub use switchfix_app::{
+    read_spell_status, spell_history_path, spell_status_path, HistoryEntry, SpellStatus,
+    SpellStatusStore,
+};
 pub use platform::{
     create_platform, create_platform_from, detect, detect_from, detect_os, parse_desktop,
     parse_session, BuildOptions, DesktopKind, OsKind, Platform, PlatformError, PlatformInfo,

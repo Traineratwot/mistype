@@ -17,6 +17,7 @@ use tokio::sync::watch;
 use tracing::debug;
 
 use crate::config::AppConfig;
+use crate::spell_status::SpellStatusStore;
 use crate::ports::{
     ContextCorrector, FocusMonitor, SpellChecker, SuggestionPresenter, SuggestionUi, TextInjector,
     TypingBufferPort, WordEvent,
@@ -31,6 +32,8 @@ pub enum SpellAction {
     ShowedHints,
     /// A word (or fragment) was replaced.
     Replaced { from: String, to: String },
+    /// Auto-replace was rolled back by Backspace (original word restored).
+    Undone { to: String },
     /// Word was added to the personal dictionary.
     Learned { word: String },
     /// Bar was hidden without a change.
@@ -48,6 +51,21 @@ struct Pending {
     trailing: String,
     slots: Vec<Suggestion>,
 }
+
+/// Undo target after a silent auto-replace (Backspace rolls it back).
+#[derive(Debug, Clone)]
+struct UndoState {
+    /// What the user actually typed (to restore).
+    original: String,
+    /// What we injected instead.
+    replacement: String,
+    /// Separator after the word (usually a space).
+    trailing: String,
+    when: Instant,
+}
+
+/// How long Backspace still means "undo last auto-replace".
+const UNDO_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Orchestrates spellcheck, completion and word replacement.
 pub struct SpellService {
@@ -71,6 +89,10 @@ pub struct SpellService {
     auto_block: AtomicBool,
     /// When the last replace happened (for logs / future debounce).
     last_replace: Mutex<Option<Instant>>,
+    /// Set after auto-replace so the next Backspace undoes it.
+    undo: Mutex<Option<UndoState>>,
+    /// Live counters + transform history (UI / suggest-peek).
+    stats: Arc<SpellStatusStore>,
 }
 
 impl SpellService {
@@ -112,7 +134,19 @@ impl SpellService {
             suppress: AtomicBool::new(false),
             auto_block: AtomicBool::new(false),
             last_replace: Mutex::new(None),
+            undo: Mutex::new(None),
+            stats: SpellStatusStore::new(),
         }
+    }
+
+    /// Shared spell/LLM statistics for UI / `suggest-peek`.
+    pub fn stats(&self) -> Arc<SpellStatusStore> {
+        Arc::clone(&self.stats)
+    }
+
+    /// Record that a context backend is wired (or not).
+    pub fn set_context_status(&self, configured: bool, name: &str) {
+        self.stats.set_llm(configured, name);
     }
 
     /// Install a hybrid context backend (LanguageTool / LLM). Optional.
@@ -168,12 +202,20 @@ impl SpellService {
                     .await
             }
             WordEvent::Updated(frag) => {
-                // Real typing (not our inject) re-arms auto-replace.
+                // Real typing (not our inject) re-arms auto-replace and
+                // cancels "Backspace = undo" (the user is editing manually).
                 if !frag.is_empty() {
                     self.auto_block.store(false, Ordering::SeqCst);
+                    *self.undo.lock().unwrap() = None;
                 }
                 debug!("word fragment: {:?}", frag);
                 self.on_fragment_updated(frag, &cfg).await
+            }
+            WordEvent::Backspace => {
+                if self.suppress.load(Ordering::SeqCst) {
+                    return SpellAction::None;
+                }
+                self.on_backspace().await
             }
         }
     }
@@ -215,7 +257,8 @@ impl SpellService {
             return SpellAction::None;
         };
         let replacement = preserve_case(&word, &top.text);
-        self.apply_replace(&word, &replacement, erase_len, &trailing)
+        let via = top.via.clone();
+        self.apply_replace(&word, &replacement, erase_len, &trailing, &via)
             .await
     }
 
@@ -230,9 +273,10 @@ impl SpellService {
             return SpellAction::None;
         };
         let replacement = preserve_case(&p.original, &slot.text);
+        let via = slot.via.clone();
         let _ = self.presenter.hide().await;
         *self.pending.lock().unwrap() = None;
-        self.apply_replace(&p.original, &replacement, p.erase_len, &p.trailing)
+        self.apply_replace(&p.original, &replacement, p.erase_len, &p.trailing, &via)
             .await
     }
 
@@ -335,8 +379,9 @@ impl SpellService {
                 *self.pending.lock().unwrap() = None;
                 let _ = self.presenter.hide().await;
                 // Word only; the Space the user pressed stays after the word.
+                let via = top.via.clone();
                 return self
-                    .apply_replace(&word, &replacement, char_len, &separator.to_string())
+                    .apply_replace(&word, &replacement, char_len, &separator.to_string(), &via)
                     .await;
             }
             debug!(
@@ -424,6 +469,7 @@ impl SpellService {
                 "spell skip {:?}: context says word is ok (dict false positive)",
                 word
             );
+            self.stats.note("veto", word, word, "context");
             return None;
         }
 
@@ -432,7 +478,10 @@ impl SpellService {
             let strong: Vec<Suggestion> = ctx_fixes
                 .iter()
                 .filter(|f| !f.is_ok && f.confidence >= 0.75)
-                .map(|f| Suggestion::new(f.text.clone(), SuggestionKind::SpellFix, word))
+                .map(|f| {
+                    Suggestion::new(f.text.clone(), SuggestionKind::SpellFix, word)
+                        .with_via("context")
+                })
                 .collect();
             if !strong.is_empty() {
                 let conv = self.layout_candidate(word);
@@ -458,7 +507,9 @@ impl SpellService {
         }
 
         for c in self.spell.suggest(word, lang, n) {
-            out.push(Suggestion::new(c, SuggestionKind::SpellFix, word));
+            out.push(
+                Suggestion::new(c, SuggestionKind::SpellFix, word).with_via("dict"),
+            );
         }
 
         if use_hybrid {
@@ -472,7 +523,10 @@ impl SpellService {
                 }
                 if let Some(m_lang) = detect_lang(&cand) {
                     if self.spell.is_correct(&cand, m_lang) {
-                        out.push(Suggestion::new(cand, SuggestionKind::SpellFix, word));
+                        out.push(
+                            Suggestion::new(cand, SuggestionKind::SpellFix, word)
+                                .with_via("edit1"),
+                        );
                     }
                 }
             }
@@ -482,7 +536,10 @@ impl SpellService {
                     continue;
                 }
                 if !out.iter().any(|s| s.text == f.text) {
-                    out.push(Suggestion::new(f.text.clone(), SuggestionKind::SpellFix, word));
+                    out.push(
+                        Suggestion::new(f.text.clone(), SuggestionKind::SpellFix, word)
+                            .with_via("context"),
+                    );
                 }
             }
         } else {
@@ -493,7 +550,10 @@ impl SpellService {
                 }
                 if let Some(m_lang) = detect_lang(&cand) {
                     if self.spell.is_correct(&cand, m_lang) {
-                        out.push(Suggestion::new(cand, SuggestionKind::SpellFix, word));
+                        out.push(
+                            Suggestion::new(cand, SuggestionKind::SpellFix, word)
+                                .with_via("edit1"),
+                        );
                     }
                 }
             }
@@ -516,11 +576,10 @@ impl SpellService {
         }
         let c_lang = detect_lang(&converted)?;
         if self.spell.is_correct(&converted, c_lang) {
-            Some(Suggestion::new(
-                converted,
-                SuggestionKind::LayoutConvert,
-                word,
-            ))
+            Some(
+                Suggestion::new(converted, SuggestionKind::LayoutConvert, word)
+                    .with_via("layout"),
+            )
         } else {
             None
         }
@@ -544,8 +603,10 @@ impl SpellService {
                 .map(|s| s.trim_end().to_string())
                 .unwrap_or_else(|| t.to_string())
         };
+        let t0 = std::time::Instant::now();
         match ctx.correct(word, &context, lang).await {
             Ok(fixes) => {
+                self.stats.note_llm(true, t0.elapsed().as_millis() as u64);
                 if !fixes.is_empty() {
                     debug!(
                         "context[{}] word={:?} fixes={:?}",
@@ -560,6 +621,7 @@ impl SpellService {
                 fixes
             }
             Err(e) => {
+                self.stats.note_llm(false, t0.elapsed().as_millis() as u64);
                 debug!("context[{}] failed: {e}", ctx.name());
                 Vec::new()
             }
@@ -587,18 +649,92 @@ impl SpellService {
             can_add_to_dict: !is_completion && cfg.spell.mode != "hotkey",
             timeout_ms: cfg.spell.bar_timeout_ms,
         };
+        let via = slots.first().map(|s| s.via.clone()).unwrap_or_default();
         let _ = self.presenter.show(ui).await;
         *self.pending.lock().unwrap() = Some(Pending {
-            original,
+            original: original.clone(),
             erase_len,
             trailing: trailing.to_string(),
             slots,
         });
+        self.stats.note("hint", &original, "", &via);
         SpellAction::ShowedHints
     }
 
     async fn dismiss_if_showing(&self) -> SpellAction {
         self.dismiss().await
+    }
+
+    /// Physical Backspace: roll back a recent auto-replace if any.
+    ///
+    /// One Backspace = undo the whole word fix (original restored + space).
+    /// The next Space will NOT auto-replace again (`auto_block` stays set
+    /// until the user types something new).
+    async fn on_backspace(&self) -> SpellAction {
+        let undo = {
+            let mut g = self.undo.lock().unwrap();
+            match g.as_ref() {
+                Some(u) if u.when.elapsed() <= UNDO_WINDOW => g.take().unwrap(),
+                Some(_) => {
+                    *g = None;
+                    return SpellAction::None;
+                }
+                None => return SpellAction::None,
+            }
+        };
+        // Physical Backspace already deleted one character of the replacement
+        // (or its trailing separator) in the app. We clear the rest and put
+        // the original word + separator back.
+        let typed = undo.replacement.chars().count() + undo.trailing.chars().count();
+        let already = 1usize.min(typed);
+        let remaining = typed - already;
+
+        self.suppress.store(true, Ordering::SeqCst);
+        self.buffer.wait_keys_quiet(50, 500).await;
+
+        if remaining > 0 {
+            if let Err(e) = self.injector.backspace(remaining).await {
+                tracing::warn!("spell undo failed (backspace {remaining}): {e}");
+                self.suppress.store(false, Ordering::SeqCst);
+                return SpellAction::None;
+            }
+        }
+        let layout = switchfix_domain::LayoutId::new(match detect_lang(&undo.original) {
+            Some("ru") => "ru",
+            _ => "us",
+        });
+        if let Err(e) = self.injector.type_text(&undo.original, &layout).await {
+            tracing::warn!("spell undo failed (type {:?}): {e}", undo.original);
+            self.suppress.store(false, Ordering::SeqCst);
+            return SpellAction::None;
+        }
+        if !undo.trailing.is_empty() {
+            let sep_layout = switchfix_domain::LayoutId::new("us");
+            let _ = self.injector.type_text(&undo.trailing, &sep_layout).await;
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        let mut synced = undo.original.clone();
+        synced.push_str(&undo.trailing);
+        self.buffer.set_contents(&synced);
+        self.suppress.store(false, Ordering::SeqCst);
+        // Keep auto_block: the next Space must not replace this word again.
+        self.auto_block.store(true, Ordering::SeqCst);
+        *self.last_word.lock().unwrap() = Some((
+            undo.original.clone(),
+            undo.original.chars().count(),
+            undo.trailing.chars().next().unwrap_or(' '),
+        ));
+
+        debug!(
+            restored = undo.original,
+            "spell undo (backspace after auto-replace; next Space will not re-fix)"
+        );
+        self.stats
+            .note("undo", &undo.replacement, &undo.original, "none");
+        SpellAction::Undone {
+            to: undo.original.clone(),
+        }
     }
 
     async fn apply_replace(
@@ -607,6 +743,7 @@ impl SpellService {
         replacement: &str,
         erase_len: usize,
         trailing: &str,
+        via: &str,
     ) -> SpellAction {
         if replacement == original {
             return SpellAction::None;
@@ -663,6 +800,13 @@ impl SpellService {
         // One auto-replace per word: wait for new typing before the next.
         self.auto_block.store(true, Ordering::SeqCst);
         *self.last_replace.lock().unwrap() = Some(Instant::now());
+        // Backspace within UNDO_WINDOW rolls this replace back.
+        *self.undo.lock().unwrap() = Some(UndoState {
+            original: original.to_string(),
+            replacement: replacement.to_string(),
+            trailing: trailing.to_string(),
+            when: Instant::now(),
+        });
         // last_word is now the replacement (Ctrl+Alt+F shouldn't undo us).
         let char_len = replacement.chars().count();
         *self.last_word.lock().unwrap() = Some((
@@ -677,6 +821,7 @@ impl SpellService {
             trailing,
             "spell replaced (word+sep rewritten; space before untouched)"
         );
+        self.stats.note("replace", original, replacement, via);
         SpellAction::Replaced {
             from: original.to_string(),
             to: replacement.to_string(),
@@ -1010,6 +1155,63 @@ mod tests {
         svc.on_word_event(WordEvent::Updated("приветт".into())).await;
         let a3 = svc.on_word_event(ev()).await;
         assert!(matches!(a3, SpellAction::Replaced { .. }));
+    }
+
+    #[tokio::test]
+    async fn backspace_undoes_auto_replace_and_blocks_next_space() {
+        let (svc, i, _p) = setup("auto");
+        let ev = || WordEvent::Completed {
+            word: WordSpan {
+                text: "приветт".into(),
+                char_len: 7,
+            },
+            separator: ' ',
+        };
+        let a1 = svc.on_word_event(ev()).await;
+        assert_eq!(
+            a1,
+            SpellAction::Replaced {
+                from: "приветт".into(),
+                to: "привет".into(),
+            }
+        );
+        // First Backspace after auto-replace → restore original + space.
+        let a2 = svc.on_word_event(WordEvent::Backspace).await;
+        assert_eq!(a2, SpellAction::Undone { to: "приветт".into() });
+
+        let log = i.log.lock().unwrap().clone();
+        // Replace: bs word+sep (8), type "привет", type " ".
+        // Undo: user's BS ate 1 char → we bs remaining of "привет " (6),
+        // type "приветт", type " ".
+        assert_eq!(
+            log,
+            vec![
+                "bs:8".to_string(),
+                "type:привет:ru".to_string(),
+                "type: :us".to_string(),
+                "bs:6".to_string(),
+                "type:приветт:ru".to_string(),
+                "type: :us".to_string(),
+            ],
+            "undo must restore original word+space: {log:?}"
+        );
+
+        // Space again → must NOT auto-replace (auto_block stays set).
+        let a3 = svc.on_word_event(ev()).await;
+        assert!(!matches!(a3, SpellAction::Replaced { .. }), "got {a3:?}");
+        let log = i.log.lock().unwrap().clone();
+        assert_eq!(
+            log.iter().filter(|l| l.starts_with("type:приветт")).count(),
+            1,
+            "second Space must not type the original again: {log:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn backspace_without_replace_is_noop() {
+        let (svc, _i, _p) = setup("auto");
+        let a = svc.on_word_event(WordEvent::Backspace).await;
+        assert_eq!(a, SpellAction::None);
     }
 
     #[tokio::test]

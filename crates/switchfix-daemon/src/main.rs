@@ -56,6 +56,8 @@ enum Command {
     },
     /// Print current suggestion-bar state as JSON (for the Plasma widget).
     SuggestPeek,
+    /// Print LLM/spell statistics and recent transform history (JSON).
+    SpellStats,
     /// Accept suggestion slot N (1-based) from the running daemon.
     SuggestAccept {
         /// Slot number 1..=3.
@@ -194,6 +196,7 @@ async fn main() -> anyhow::Result<()> {
             let sug = std::fs::read_to_string(switchfix_adapters::suggest_state_path())
                 .ok()
                 .and_then(|j| serde_json::from_str::<switchfix_app::ports::SuggestionUi>(&j).ok());
+            let spell_st = switchfix_app::read_spell_status();
             let json = serde_json::json!({
                 "daemon": hb.is_some(),
                 "enabled": hb.map(|h| h.enabled).unwrap_or(false),
@@ -201,8 +204,64 @@ async fn main() -> anyhow::Result<()> {
                 "slots": sug.as_ref().map(|s| s.slots.clone()).unwrap_or_default(),
                 "can_add_to_dict": sug.as_ref().map(|s| s.can_add_to_dict).unwrap_or(false),
                 "timeout_ms": sug.as_ref().map(|s| s.timeout_ms).unwrap_or(0),
+                // LLM / hybrid diagnostics for the widget + `spell-stats`.
+                "llm": spell_st.as_ref().map(|s| serde_json::json!({
+                    "configured": s.llm_configured,
+                    "name": s.llm_name,
+                    "ok": s.llm_ok,
+                    "calls": s.llm_calls,
+                    "errors": s.llm_errors,
+                    "last_ms": s.llm_last_ms,
+                })).unwrap_or(serde_json::json!({ "configured": false, "name": "", "ok": null })),
+                "stats": spell_st.as_ref().map(|s| serde_json::json!({
+                    "replaced": s.replaced,
+                    "undone": s.undone,
+                    "hints": s.hints,
+                    "vetoes": s.vetoes,
+                    "via": {
+                        "layout": s.via_layout,
+                        "dict": s.via_dict,
+                        "edit1": s.via_edit1,
+                        "context": s.via_context,
+                    },
+                    "history": s.history,
+                })).unwrap_or(serde_json::json!({})),
             });
             println!("{json}");
+        }
+        Command::SpellStats => {
+            let st = switchfix_app::read_spell_status();
+            match st {
+                Some(s) => {
+                    let json = serde_json::json!({
+                        "llm": {
+                            "configured": s.llm_configured,
+                            "name": s.llm_name,
+                            "ok": s.llm_ok,
+                            "calls": s.llm_calls,
+                            "errors": s.llm_errors,
+                            "last_ms": s.llm_last_ms,
+                        },
+                        "stats": {
+                            "replaced": s.replaced,
+                            "undone": s.undone,
+                            "hints": s.hints,
+                            "vetoes": s.vetoes,
+                            "via_layout": s.via_layout,
+                            "via_dict": s.via_dict,
+                            "via_edit1": s.via_edit1,
+                            "via_context": s.via_context,
+                        },
+                        "history": s.history,
+                        "history_log": switchfix_app::spell_history_path(),
+                    });
+                    println!("{}", serde_json::to_string_pretty(&json)?);
+                }
+                None => {
+                    eprintln!("no spell status yet (daemon not running or no words checked)");
+                    println!("{{}}");
+                }
+            }
         }
         Command::SuggestAccept { slot } => {
             write_suggest_cmd(&format!("accept:{slot}")).await;
@@ -395,6 +454,7 @@ async fn run_daemon() -> anyhow::Result<()> {
                 if matches!(
                     action,
                     switchfix_app::services::SpellAction::Replaced { .. }
+                        | switchfix_app::services::SpellAction::Undone { .. }
                 ) && sound_cfg.borrow().spell.sound
                 {
                     switchfix_ui::play_fix_sound();

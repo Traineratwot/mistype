@@ -19,7 +19,7 @@ stubs behind a platform layer (groundwork for the future).
 | Tray + settings GUI + suggestion bar | `switchfix-ui` | ✅ compiles, flash/sound + bar |
 | CLI / daemon / doctor / selftest / spell | `switchfix-daemon` | ✅ works on live KDE |
 
-**Tests: 154 green** (+ 1 ignored live KDE D-Bus test). Verified live:
+**Tests: 158 green** (+ 1 ignored live KDE D-Bus test). Verified live:
 hotkey intercept (evdev), layout switch (zbus), convert, tray flash + sound,
 spellcheck CLI (zspell RU/EN + layout-convert candidates).
 
@@ -215,7 +215,8 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 | `settings` | iced settings window (separate process) |
 | `convert [--text]` | Pure domain convert (no injection) |
 | `spell [--text]` | Spellcheck a word; prints candidates (layout-convert + dict) |
-| `suggest-peek` | JSON of current suggestions (for the Plasma widget) |
+| `suggest-peek` | JSON of current suggestions + LLM/stats (for the Plasma widget) |
+| `spell-stats` | LLM/spell counters + recent transform history (JSON) |
 | `suggest-accept N` / `suggest-learn` / `suggest-dismiss` | Control suggestions from CLI/widget |
 | `suggest-bar` | Terminal fallback (prints suggestions; no GUI window) |
 | `doctor` | Diagnostics: platform, groups, uinput, D-Bus, **hotkeys**, sound, **dictionaries** |
@@ -247,7 +248,7 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 - `spell.backend` (`dict`|`hybrid`|`auto`) — hybrid adds edit-1/confusable neighbors + optional context engine
 - `spell.lt_url` (LanguageTool HTTP, e.g. `http://127.0.0.1:8010`), `spell.llm_cmd` (JSON stdin/stdout corrector)
 - `spell.context_chars` (how much typed tail is sent as context)
-- Hybrid LLM wrapper: `tools/llm-spell/` (`llm-spell` + `setup.sh`). Persistent JSON-lines, backends `t5|ollama|rules`, models ≤300 MB.
+- Hybrid LLM: `crates/switchfix-llm` (native llama.cpp, no Python). `switchfix-llm pull` downloads GGUF into `~/.local/share/switchfix/models/llm/`. Set `llm_cmd = "switchfix-llm"`. Models: `qwen2.5-0.5b-instruct-q4_0` (~409 MB), `smollm2-135m-instruct-q4_k_m` (~100 MB).
 - `spell.languages` (`["ru","en"]`), `spell.min_word_len`, `spell.completion_min_chars`
 - `spell.suggest_count`, `spell.bar_position`, `spell.bar_timeout_ms`
 - `spell.auto_fix_min_len`, `spell.sound` (short signal on word replace)

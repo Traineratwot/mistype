@@ -1,0 +1,24 @@
+[package]
+name = "switchfix-llm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Local GGUF spell corrector for SwitchFix (llama.cpp, no Python)"
+publish = false
+
+[[bin]]
+name = "switchfix-llm"
+path = "src/main.rs"
+
+[dependencies]
+llama_cpp = { version = "0.3.2", default-features = false, features = ["native"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+# Model download (HuggingFace resolve URLs).
+ureq = { version = "2", default-features = false, features = ["tls"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
