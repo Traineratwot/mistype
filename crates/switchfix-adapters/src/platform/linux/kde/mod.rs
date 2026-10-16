@@ -10,10 +10,10 @@ use switchfix_app::ports::{
     ClipboardPort, ConfigStore, FocusMonitor, HotkeySource, LayoutSwitcher, Notifier,
     SelectionCapture, TextInjector, TypingBufferPort,
 };
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::platform::portable::{
-    ArboardClipboard, LogNotifier, ManualHotkeySource, SharedSuggestionPresenter,
+    ArboardClipboard, LayoutCharMapper, LogNotifier, ManualHotkeySource, SharedSuggestionPresenter,
     SharedTypingBuffer, SuggestionState, TomlConfigStore, ZspellDictionary,
 };
 use crate::platform::{BuildOptions, Platform, PlatformError, PlatformInfo, PlatformServices};
@@ -69,6 +69,27 @@ impl Platform for KdePlatform {
             }
         };
 
+        // Layout-aware char mapper: keycode → actual character of the active layout.
+        let layout_ids: Vec<String> = layouts
+            .layouts()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .map(|i| i.id.as_str().to_string())
+            .collect();
+        let current_idx = layouts.current().await.map(|i| i.as_u32()).unwrap_or(0);
+        let mapper = Arc::new(LayoutCharMapper::new(layout_ids, current_idx));
+        {
+            let mapper = mapper.clone();
+            let mut rx = layouts.subscribe();
+            tokio::spawn(async move {
+                while let Ok(idx) = rx.recv().await {
+                    debug!("layout mapper -> index {}", idx.as_u32());
+                    mapper.set_current(idx.as_u32());
+                }
+            });
+        }
+
         // Injector
         let injector: Arc<dyn TextInjector> = if opts.allow_uinput {
             match UinputInjector::open() {
@@ -115,6 +136,7 @@ impl Platform for KdePlatform {
                 bar_visible,
                 consume: cfg.hotkeys.hotkey_consume,
                 buffer: buffer.clone(),
+                mapper: mapper.clone(),
             }) {
                 Ok(h) => {
                     info!(

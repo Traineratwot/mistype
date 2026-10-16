@@ -1,0 +1,19 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "switchfix@localhost",
+                "Name": "SwitchFix contributors"
+            }
+        ],
+        "Category": "Utilities",
+        "Description": "Spelling and layout suggestions from SwitchFix",
+        "Icon": "tools-check-spelling",
+        "Id": "org.switchfix.suggestions",
+        "Name": "SwitchFix Suggestions",
+        "Version": "0.1.0",
+        "Website": "https://github.com/switchfix/switchfix"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "KPackageStructure": "Plasma/Applet"
+}

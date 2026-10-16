@@ -16,6 +16,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use crate::platform::portable::typing_buffer::SharedTypingBuffer;
+use crate::platform::portable::LayoutCharMapper;
 
 // ----- key name ↔ evdev KeyCode -----
 
@@ -206,6 +207,8 @@ pub struct EvdevOptions {
     pub consume: bool,
     /// Typing buffer (for last-word mode).
     pub buffer: Arc<SharedTypingBuffer>,
+    /// Layout-aware keycode → char (so the buffer stores real typed letters).
+    pub mapper: Arc<LayoutCharMapper>,
 }
 
 impl EvdevHotkeySource {
@@ -226,6 +229,7 @@ impl EvdevHotkeySource {
             bar_visible: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             consume: false,
             buffer,
+            mapper: Arc::new(LayoutCharMapper::us_only()),
         })
     }
 
@@ -347,6 +351,7 @@ impl EvdevHotkeySource {
 
         let buffer = opts.buffer;
         let bar_visible = opts.bar_visible;
+        let mapper = opts.mapper;
         std::thread::spawn(move || {
             run_loop(
                 devices,
@@ -356,6 +361,7 @@ impl EvdevHotkeySource {
                 passthrough,
                 consume,
                 bar_visible,
+                mapper,
             );
         });
 
@@ -409,6 +415,7 @@ fn run_loop(
     passthrough: Option<Passthrough>,
     consume: bool,
     bar_visible: Arc<std::sync::atomic::AtomicBool>,
+    mapper: Arc<LayoutCharMapper>,
 ) {
     use std::sync::atomic::Ordering;
     // When consuming, we must re-inject everything that is not a hotkey.
@@ -510,11 +517,13 @@ fn run_loop(
                 }
 
                 // Typing buffer (only for real character keys on key-down).
+                // Map through the current layout so the buffer holds the
+                // characters the user actually sees (RU → Cyrillic, not Latin).
                 if value == 1 {
                     if code == 14 {
                         buffer.pop();
-                    } else if let Some(c) = key_to_char(code, shift) {
-                        buffer.push(c);
+                    } else if let Some(latin) = key_to_char(code, shift) {
+                        buffer.push(mapper.map_char(latin));
                     }
                 }
 

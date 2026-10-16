@@ -3644,6 +3644,7 @@ dependencies = [
  "async-trait",
  "clap 4.6.7",
  "dirs 6.0.0",
+ "serde_json",
  "switchfix-adapters",
  "switchfix-app",
  "switchfix-domain",

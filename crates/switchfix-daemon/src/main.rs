@@ -51,7 +51,18 @@ enum Command {
         #[arg(long)]
         text: Option<String>,
     },
-    /// Run the floating suggestion bar (spawned by the daemon).
+    /// Print current suggestion-bar state as JSON (for the Plasma widget).
+    SuggestPeek,
+    /// Accept suggestion slot N (1-based) from the running daemon.
+    SuggestAccept {
+        /// Slot number 1..=3.
+        slot: u8,
+    },
+    /// Add the flagged word to the personal dictionary.
+    SuggestLearn,
+    /// Dismiss the current suggestions.
+    SuggestDismiss,
+    /// Terminal fallback: print suggestions as they appear (no GUI window).
     SuggestBar,
 }
 
@@ -170,8 +181,24 @@ async fn main() -> anyhow::Result<()> {
             };
             run_spell_cli(&input);
         }
+        Command::SuggestPeek => {
+            let path = switchfix_adapters::suggest_state_path();
+            match std::fs::read_to_string(&path) {
+                Ok(json) => println!("{json}"),
+                Err(_) => println!("{{}}"),
+            }
+        }
+        Command::SuggestAccept { slot } => {
+            write_suggest_cmd(&format!("accept:{slot}")).await;
+        }
+        Command::SuggestLearn => {
+            write_suggest_cmd("add").await;
+        }
+        Command::SuggestDismiss => {
+            write_suggest_cmd("dismiss").await;
+        }
         Command::SuggestBar => {
-            switchfix_ui::run_suggest_bar()?;
+            switchfix_ui::run_suggest_bar();
         }
         Command::Daemon => {
             run_daemon().await?;
@@ -179,6 +206,18 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Queue a command for the running daemon (file IPC).
+async fn write_suggest_cmd(cmd: &str) {
+    let path = switchfix_adapters::suggest_cmd_path();
+    if let Err(e) = std::fs::write(&path, cmd) {
+        eprintln!("cannot write {}: {e}", path.display());
+        std::process::exit(1);
+    }
+    // Give the daemon a moment to pick the command up.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    println!("ok: {cmd}");
 }
 
 /// `switchfix spell --text …` — dictionary lookup without injection.
@@ -275,7 +314,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     // Tray
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
     let tray_model = TrayModel::new(cmd_tx, ctx.service.is_enabled());
-    let tray_handle = switchfix_ui::tray::spawn_tray(tray_model)
+    let tray_handle = switchfix_ui::tray::spawn_tray(tray_model.clone())
         .await
         .map_err(|e| anyhow::anyhow!("tray: {e}"))?;
 
@@ -296,6 +335,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     wiring::spawn_tray_dispatcher(
         cmd_rx,
         ctx.service.clone(),
+        ctx.spell.clone(),
         on_settings,
         on_quit,
     );
@@ -308,11 +348,34 @@ async fn run_daemon() -> anyhow::Result<()> {
 
     // Spell word-event loop: completions + auto-fix + hints as the user types.
     let sound_cfg = ctx.config_rx.clone();
+    let tray_refresh = {
+        // Best-effort: keep the tray menu in sync with current suggestions.
+        let model = tray_model.clone();
+        std::sync::Arc::new(move || {
+            let path = switchfix_adapters::suggest_state_path();
+            match std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|j| serde_json::from_str::<switchfix_app::ports::SuggestionUi>(&j).ok())
+            {
+                Some(ui) => {
+                    let slots: Vec<String> = ui
+                        .slots
+                        .iter()
+                        .map(|s| s.text.clone())
+                        .collect();
+                    model.set_suggestions(&ui.original, &slots, ui.can_add_to_dict);
+                }
+                None => model.clear_suggestions(),
+            }
+        })
+    };
     if let Some(spell_svc) = spell.clone() {
         let mut word_rx = buffer.word_events();
+        let tray_refresh = tray_refresh.clone();
         tokio::spawn(async move {
             while let Ok(ev) = word_rx.recv().await {
                 let action = spell_svc.on_word_event(ev).await;
+                tray_refresh();
                 if matches!(
                     action,
                     switchfix_app::services::SpellAction::Replaced { .. }
@@ -324,17 +387,10 @@ async fn run_daemon() -> anyhow::Result<()> {
         });
     }
 
-    // Floating suggestion bar (separate process — iced vs ksni event-loop clash).
+    // Suggestion UI: Plasma panel widget (org.switchfix.suggestions) and/or
+    // tray menu + Ctrl+1/2/3. No floating window (it covered other apps).
     if spell.is_some() {
-        match std::process::Command::new(
-            std::env::current_exe().unwrap_or_else(|_| "switchfix".into()),
-        )
-        .arg("suggest-bar")
-        .spawn()
-        {
-            Ok(child) => info!("suggestion bar pid {}", child.id()),
-            Err(e) => warn!("suggestion bar failed to spawn: {e}"),
-        }
+        info!("suggestions ready (plasmoid / tray menu / Ctrl+1..N)");
     }
 
     // Also poll the toggle state file for `switchfix toggle`.
@@ -374,6 +430,8 @@ async fn run_daemon() -> anyhow::Result<()> {
                                 if let Some(s) = &spell {
                                     let action = s.fix_last_word().await;
                                     info!("spell fix: {action:?}");
+                                    tray_refresh();
+                                    tray_handle.refresh();
                                     if matches!(
                                         action,
                                         switchfix_app::services::SpellAction::Replaced { .. }
@@ -387,6 +445,8 @@ async fn run_daemon() -> anyhow::Result<()> {
                                 if let Some(s) = &spell {
                                     let action = s.accept_slot(n).await;
                                     info!("spell accept {n}: {action:?}");
+                                    tray_refresh();
+                                    tray_handle.refresh();
                                     if matches!(
                                         action,
                                         switchfix_app::services::SpellAction::Replaced { .. }
@@ -400,11 +460,15 @@ async fn run_daemon() -> anyhow::Result<()> {
                                 if let Some(s) = &spell {
                                     let action = s.add_to_dictionary().await;
                                     info!("spell learn: {action:?}");
+                                    tray_refresh();
+                                    tray_handle.refresh();
                                 }
                             }
                             HotkeyEvent::DismissSuggestions => {
                                 if let Some(s) = &spell {
                                     s.dismiss().await;
+                                    tray_refresh();
+                                    tray_handle.refresh();
                                 }
                             }
                         }
@@ -473,6 +537,8 @@ async fn run_daemon() -> anyhow::Result<()> {
                             switchfix_app::services::SpellAction::None
                         };
                         info!("suggest-bar cmd {cmd:?}: {action:?}");
+                        tray_refresh();
+                        tray_handle.refresh();
                         if matches!(
                             action,
                             switchfix_app::services::SpellAction::Replaced { .. }

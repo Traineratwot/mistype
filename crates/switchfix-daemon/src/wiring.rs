@@ -129,6 +129,7 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
 pub fn spawn_tray_dispatcher(
     mut cmd_rx: mpsc::Receiver<switchfix_ui::tray::TrayCommand>,
     service: Arc<CorrectionService>,
+    spell: Option<Arc<SpellService>>,
     on_settings: Arc<dyn Fn() + Send + Sync>,
     on_quit: Arc<dyn Fn() + Send + Sync>,
 ) {
@@ -139,6 +140,9 @@ pub fn spawn_tray_dispatcher(
             match cmd {
                 TrayCommand::ToggleEnabled => {
                     service.toggle_enabled().await;
+                    if let Some(s) = &spell {
+                        s.set_enabled(service.is_enabled());
+                    }
                 }
                 TrayCommand::ConvertSelection => {
                     let _ = service.handle(CorrectionRequest::ConvertSelection).await;
@@ -147,6 +151,23 @@ pub fn spawn_tray_dispatcher(
                 TrayCommand::Quit => {
                     on_quit();
                     break;
+                }
+                TrayCommand::AcceptSuggestion(n) => {
+                    if let Some(s) = &spell {
+                        let action = s.accept_slot(n).await;
+                        info!("tray accept {n}: {action:?}");
+                    }
+                }
+                TrayCommand::LearnWord => {
+                    if let Some(s) = &spell {
+                        let action = s.add_to_dictionary().await;
+                        info!("tray learn: {action:?}");
+                    }
+                }
+                TrayCommand::DismissSuggestions => {
+                    if let Some(s) = &spell {
+                        s.dismiss().await;
+                    }
                 }
             }
         }

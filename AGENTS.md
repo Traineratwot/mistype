@@ -193,8 +193,9 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 | **`switchfix.capture-pause`** | Settings capture must not trigger real hotkeys | Daemon drains the hotkey queue while the file exists. Remove on capture end/exit. |
 | **Empty hotkey = disabled** | Esc in Settings clears the binding | `validate()` accepts `""`; `parse_hotkey_bindings` skips empty. |
 | **`HotkeySource::events()` is `take()`** | Second call returns an empty channel | Call once in the daemon loop. Never during `build_services`. |
+| **`key_to_char` maps US physical keys** | Buffer stored Latin (`ghbdtn`) while user typed Russian | Map through `LayoutCharMapper` (current KDE layout + `en_to_ru_map`). |
 | **Accept chords `Ctrl+1/2/3`** | Would steal app shortcuts if always on | evdev matches them **only while** `bar_visible` is true. |
-| **Suggestion bar vs ksni** | Two iced/winit loops in one process clash | Bar is `switchfix suggest-bar` — separate process, file IPC (`switchfix.suggest.json` / `.cmd`). |
+| **Suggestion UI** | Floating iced window covered other apps | Removed. Use Plasma widget `org.switchfix.suggestions` in the panel, tray menu, or `Ctrl+1..N`. |
 | **`key_name_to_code` returns `evdev::KeyCode`** | Linux type leak | Keep it private to `platform/linux`. |
 | **SharedTypingBuffer ≠ domain `TypingBuffer`** | Duplicate concepts | Live one is adapters `SharedTypingBuffer`. Do not merge casually; `EvdevOptions.buffer` needs concrete type (`push`/`pop`). |
 | **wl-clipboard-rs** | Was a dead dep (arboard is used) | Removed. `wl-copy`/`wl-paste` are invoked as CLI when present; arboard is the library fallback. |
@@ -214,7 +215,9 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 | `settings` | iced settings window (separate process) |
 | `convert [--text]` | Pure domain convert (no injection) |
 | `spell [--text]` | Spellcheck a word; prints candidates (layout-convert + dict) |
-| `suggest-bar` | Floating suggestion strip (spawned by daemon) |
+| `suggest-peek` | JSON of current suggestions (for the Plasma widget) |
+| `suggest-accept N` / `suggest-learn` / `suggest-dismiss` | Control suggestions from CLI/widget |
+| `suggest-bar` | Terminal fallback (prints suggestions; no GUI window) |
 | `doctor` | Diagnostics: platform, groups, uinput, D-Bus, **hotkeys**, sound, **dictionaries** |
 | `setup [-y]` | Interactive privileged setup (sudo only for root steps) |
 | `toggle` | Flip enabled/paused via temp state file |

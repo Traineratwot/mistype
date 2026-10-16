@@ -113,6 +113,7 @@ pub async fn run_hotkey_selftest() -> SelfTestReport {
         // Passive: do not grab keyboards (self-test must not break typing).
         consume: false,
         buffer,
+        mapper: Arc::new(crate::platform::portable::LayoutCharMapper::us_only()),
     }) {
         Ok(s) => s,
         Err(e) => {

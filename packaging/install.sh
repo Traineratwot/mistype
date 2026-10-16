@@ -130,6 +130,18 @@ if [[ -f "${ROOT}/assets/icons/switchfix.svg" ]]; then
   install_file 0644 "${ROOT}/assets/icons/switchfix.svg" "${ICON_DIR}/switchfix.svg"
 fi
 
+# Plasma suggestion widget → ~/.local/share/plasma/plasmoids (user-level, no sudo).
+PLASMOID_SRC="${ROOT}/packaging/plasmoid/org.switchfix.suggestions"
+PLASMOID_DST="${HOME}/.local/share/plasma/plasmoids/org.switchfix.suggestions"
+if [[ -d "$PLASMOID_SRC" ]]; then
+  echo "==> Installing Plasma widget to ${PLASMOID_DST}"
+  mkdir -p "${HOME}/.local/share/plasma/plasmoids"
+  rm -rf "$PLASMOID_DST"
+  cp -a "$PLASMOID_SRC" "$PLASMOID_DST"
+  echo "    Add it via: right-click panel → Add Widgets → 'SwitchFix Suggestions'"
+  echo "    Or test standalone: plasmawindowed org.switchfix.suggestions"
+fi
+
 for doc in PRIVACY.md SECURITY.md MANUAL-TEST-MATRIX.md; do
   if [[ -f "${ROOT}/docs/${doc}" ]]; then
     install_file 0644 "${ROOT}/docs/${doc}" "${DOC_DIR}/${doc}"

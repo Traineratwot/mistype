@@ -271,6 +271,21 @@ pub async fn run() -> DoctorReport {
                     "none found — install hunspell-ru / hunspell-en-us (or switchfix spell off)".into()
                 },
             ));
+
+            // Plasma suggestion widget.
+            let plasmoid_dir = dirs::home_dir()
+                .unwrap_or_default()
+                .join(".local/share/plasma/plasmoids/org.switchfix.suggestions");
+            let has_widget = plasmoid_dir.is_dir();
+            lines.push((
+                "plasmoid".into(),
+                has_widget,
+                if has_widget {
+                    "org.switchfix.suggestions installed".into()
+                } else {
+                    "not installed — run `switchfix setup` or copy packaging/plasmoid/org.switchfix.suggestions to ~/.local/share/plasma/plasmoids/".into()
+                },
+            ));
         } else {
             lines.push(("spell dictionaries".into(), true, "spellcheck disabled".into()));
         }
