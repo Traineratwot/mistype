@@ -67,7 +67,9 @@ sg input -c './target/release/switchfix daemon'
 | Dismiss suggestion bar | `ctrl+alt+period` |
 
 The live config may differ (e.g. `insert`) — always check `switchfix doctor`.
-Click-to-capture in Settings UI; Esc cancels. After config change: **restart daemon**.
+Click-to-capture in Settings UI; Esc cancels. After config change: **Save restarts
+the daemon automatically** (`$TMPDIR/switchfix.restart` → daemon re-execs itself,
+same PID, so systemd/user service stays intact).
 
 Hotkey feedback: tray icon flashes amber (~350 ms) + system sound + log line
 `hotkey received: …`. Toggle via `hotkeys.hotkey_consume` (default `true`):
@@ -259,10 +261,13 @@ checkboxes Ctrl/Alt/Shift/Meta force modifiers; while capturing a
 `switchfix.capture-pause` file is written and the daemon ignores hotkeys.
 
 Footer actions:
+- **«Сохранить»** — writes `config.toml` and signals `$TMPDIR/switchfix.restart`;
+  the running daemon re-execs itself so hotkeys/consume rebind. If no daemon is
+  running, the flag is ignored (start `switchfix daemon` to pick the config up).
 - **«Редактировать конфиг»** — `xdg-open ~/.config/switchfix/` (`config.toml` + `maps/`).
 - **«Перезагрузить конфиг»** — re-reads the form from disk and writes
   `$TMPDIR/switchfix.reload`; the daemon applies `config` + maps within ~2 s.
-  **Hotkeys still require a daemon restart.**
+  **Hotkeys still require Save (or a daemon restart).**
 
 ### Layout maps (`~/.config/switchfix/maps/`)
 
@@ -336,14 +341,17 @@ Run `switchfix setup` if `/dev/uinput` is not writable.
 A: Hybrid GPU + Wayland wgpu panic. We force `WGPU_BACKEND=gl`. Don't remove.
 
 **Q: I changed a hotkey in Settings but it still uses the old one.**  
-A: MVP reads bindings at daemon start. **Restart the daemon.**
+A: Press «Сохранить» — the daemon re-execs itself and rebinds hotkeys
+(~0.5 s). If the daemon wasn't running, start it. «Перезагрузить конфиг»
+only soft-reloads maps/config, not hotkeys.
 
 **Q: How do I change the layout map / terminal app list?**  
 A: Settings → «Редактировать конфиг» → edit `maps/en2ru.json` (MapFile schema)
 or `behavior.terminal_apps` in `config.toml` → «Перезагрузить конфиг»
 (or `switchfix reload`). Maps + `terminal_apps` apply without restart;
-hotkeys still need one. Save in Settings **overwrites** `config.toml` —
-prefer hand-edits then Reload, don't Save afterwards unless you meant to.
+hotkeys need «Сохранить» (daemon auto-restarts). Save in Settings
+**overwrites** `config.toml` — prefer hand-edits then Reload, don't Save
+afterwards unless you meant to.
 
 **Q: Reload button does nothing.**  
 A: Daemon polls `$TMPDIR/switchfix.reload` every ~2 s. Check

@@ -209,10 +209,11 @@ async fn main() -> anyhow::Result<()> {
                     "configured": s.llm_configured,
                     "name": s.llm_name,
                     "ok": s.llm_ok,
+                    "busy": s.llm_busy,
                     "calls": s.llm_calls,
                     "errors": s.llm_errors,
                     "last_ms": s.llm_last_ms,
-                })).unwrap_or(serde_json::json!({ "configured": false, "name": "", "ok": null })),
+                })).unwrap_or(serde_json::json!({ "configured": false, "name": "", "ok": null, "busy": false })),
                 "stats": spell_st.as_ref().map(|s| serde_json::json!({
                     "replaced": s.replaced,
                     "undone": s.undone,
@@ -238,6 +239,7 @@ async fn main() -> anyhow::Result<()> {
                             "configured": s.llm_configured,
                             "name": s.llm_name,
                             "ok": s.llm_ok,
+                            "busy": s.llm_busy,
                             "calls": s.llm_calls,
                             "errors": s.llm_errors,
                             "last_ms": s.llm_last_ms,
@@ -480,9 +482,13 @@ async fn run_daemon() -> anyhow::Result<()> {
     let mut last_toggle = std::fs::read_to_string(&toggle_path).unwrap_or_else(|_| "1".into());
     let reload_path = std::env::temp_dir().join("switchfix.reload");
     let mut last_reload = std::fs::read_to_string(&reload_path).unwrap_or_default();
+    // Settings "Сохранить" signals a full restart so hotkeys rebind (re-exec).
+    let restart_path = std::env::temp_dir().join("switchfix.restart");
+    let last_restart = std::fs::read_to_string(&restart_path).unwrap_or_default();
     let suggest_cmd_path = switchfix_adapters::platform::portable::suggest_cmd_path();
     switchfix_adapters::write_daemon_heartbeat(service.is_enabled());
 
+    let mut restart_requested = false;
     loop {
         tokio::select! {
             _ = quit.notified() => {
@@ -591,11 +597,19 @@ async fn run_daemon() -> anyhow::Result<()> {
                         if let Some(s) = &spell {
                             s.replace_tables(tables);
                         }
-                        info!("layout maps reloaded (hotkeys still need a daemon restart)");
+                        info!("layout maps reloaded (hotkeys need Settings «Сохранить» or a daemon restart)");
                     }
                 }
             }
             _ = tokio::time::sleep(std::time::Duration::from_millis(400)) => {
+                // Settings Save: full restart so hotkeys / consume rebind.
+                if let Ok(token) = std::fs::read_to_string(&restart_path) {
+                    if token != last_restart {
+                        restart_requested = true;
+                        break;
+                    }
+                }
+
                 // Settings capture UI writes this flag — skip hotkeys while set.
                 let capturing = std::fs::metadata(
                     std::env::temp_dir().join("switchfix.capture-pause"),
@@ -657,6 +671,32 @@ async fn run_daemon() -> anyhow::Result<()> {
 
     tray_handle.abort();
     switchfix_adapters::clear_daemon_heartbeat();
+
+    if restart_requested {
+        info!("restarting daemon (settings save)");
+        // Brief pause so the tray icon can disappear cleanly on KDE.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        reexec_daemon()?;
+    }
+
     info!("daemon stopped");
     Ok(())
+}
+
+/// Replace this process with a fresh daemon (same PID — systemd stays happy).
+/// Hotkeys are bound at startup, so a re-exec is the reliable way to rebind.
+fn reexec_daemon() -> anyhow::Result<()> {
+    let exe = std::env::current_exe()?;
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = std::process::Command::new(&exe).args(&args).exec();
+        Err(anyhow::anyhow!("failed to re-exec daemon: {err}"))
+    }
+    #[cfg(not(unix))]
+    {
+        std::process::Command::new(&exe).args(&args).spawn()?;
+        std::process::exit(0);
+    }
 }

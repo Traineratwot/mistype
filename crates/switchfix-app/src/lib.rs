@@ -11,4 +11,7 @@ pub use hotkey::HotkeyBinding;
 pub use ports::*;
 pub use services::{CorrectionService, SpellAction, SpellService};
 
-pub use spell_status::{read_spell_status, spell_history_path, spell_status_path, HistoryEntry, SpellStatus, SpellStatusStore};
+pub use spell_status::{
+    read_spell_status, spell_history_path, spell_status_path, HistoryEntry, LlmBusyGuard,
+    SpellStatus, SpellStatusStore,
+};

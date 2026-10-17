@@ -33,6 +33,14 @@ PlasmoidItem {
     readonly property int stReplaced: (stats && stats.replaced) ? Number(stats.replaced) : 0
     readonly property int stUndone: (stats && stats.undone) ? Number(stats.undone) : 0
     readonly property int stHints: (stats && stats.hints) ? Number(stats.hints) : 0
+    /// Context backend (LLM / LT) is currently correcting a word.
+    readonly property bool llmBusy: !!(llm && llm.busy)
+    /// Newest-first transform history (`stats.history` from suggest-peek).
+    readonly property var history: {
+        if (!stats || !stats.history)
+            return [];
+        return stats.history.slice().reverse();
+    }
     readonly property string viaSummary: {
         if (!stats || !stats.via)
             return "";
@@ -41,13 +49,36 @@ PlasmoidItem {
              + " · edit1 " + (v.edit1 || 0) + " · llm " + (v.context || 0);
     }
 
+    function actionLabel(a) {
+        if (a === "replace")
+            return i18n("замена");
+        if (a === "undo")
+            return i18n("откат");
+        if (a === "hint")
+            return i18n("подсказка");
+        if (a === "veto")
+            return i18n("пропуск");
+        return a || "";
+    }
+    function actionColor(a) {
+        if (a === "replace")
+            return Kirigami.Theme.positiveTextColor;
+        if (a === "undo")
+            return Kirigami.Theme.neutralTextColor;
+        if (a === "veto")
+            return Kirigami.Theme.disabledTextColor;
+        return Kirigami.Theme.textColor;
+    }
+
     toolTipMainText: daemonRunning
         ? i18n("SwitchFix — %1", enabled ? i18n("работает") : i18n("пауза"))
         : i18n("SwitchFix — демон не запущен")
     toolTipSubText: {
-        var llmLine = llmConfigured
-            ? i18n("LLM: %1 (%2 выз., %3 ошиб.)", llmName || "on", llmCalls, llmErrors)
-            : i18n("LLM: выключен");
+        var llmLine = llmBusy
+            ? i18n("LLM: думает…")
+            : (llmConfigured
+                ? i18n("LLM: %1 (%2 выз., %3 ошиб.)", llmName || "on", llmCalls, llmErrors)
+                : i18n("LLM: выключен"));
         if (hasTips)
             return i18n("«%1» → %2\n%3", original, slots.map(function (s) { return s.text; }).join(", "), llmLine);
         return llmLine + "\n" + i18n("Замен: %1 · откатов: %2 · подсказок: %3", stReplaced, stUndone, stHints);
@@ -99,14 +130,14 @@ PlasmoidItem {
         id: compactRoot
         Layout.preferredHeight: Kirigami.Units.iconSizes.medium
         Layout.minimumWidth: Kirigami.Units.iconSizes.medium
-        Layout.preferredWidth: root.hasTips
-            ? led.width + row.implicitWidth + Kirigami.Units.smallSpacing * 3
+        Layout.preferredWidth: (root.hasTips || root.llmBusy)
+            ? Math.max(Kirigami.Units.iconSizes.medium, row.implicitWidth + Kirigami.Units.smallSpacing * 2)
             : Kirigami.Units.iconSizes.medium
 
         readonly property color ledColor: !root.daemonRunning
             ? "#e74c3c"   // red — daemon down
             : (!root.enabled ? "#f0c000"   // yellow — paused
-                             : "#2ecc71")  // green — running
+                             : (root.llmBusy ? "#3498db" : "#2ecc71"))  // blue = LLM thinking, green = idle
 
         RowLayout {
             id: row
@@ -134,18 +165,29 @@ PlasmoidItem {
                 }
             }
 
+            // Spinner while LLM / LanguageTool is working (panel space is tight).
+            PlasmaComponents.BusyIndicator {
+                visible: root.llmBusy
+                running: root.llmBusy
+                width: 14
+                height: 14
+                Layout.alignment: Qt.AlignVCenter
+            }
+
             // LLM backend status chip (tiny).
             Rectangle {
                 visible: root.llmConfigured
                 width: llmLabel.implicitWidth + 6
                 height: 12
                 radius: 3
-                color: root.llmOk === false ? "#e74c3c" : (root.llmOk === true ? "#2ecc71" : "#888888")
+                color: root.llmBusy ? "#3498db"
+                    : (root.llmOk === false ? "#e74c3c" : (root.llmOk === true ? "#2ecc71" : "#888888"))
                 Layout.alignment: Qt.AlignVCenter
                 PlasmaComponents.Label {
                     id: llmLabel
                     anchors.centerIn: parent
-                    text: root.llmName === "llm" ? "LLM" : (root.llmName || "ctx")
+                    text: root.llmBusy ? "…"
+                        : (root.llmName === "llm" ? "LLM" : (root.llmName || "ctx"))
                     font.pointSize: 7
                     color: "white"
                 }
@@ -266,14 +308,27 @@ PlasmoidItem {
             Layout.fillWidth: true
             spacing: 2
 
-            PlasmaComponents.Label {
+            RowLayout {
                 Layout.fillWidth: true
-                text: root.llmConfigured
-                    ? i18n("Движок: %1 — %2", root.llmName || "context",
-                           root.llmOk === false ? i18n("ошибка") : i18n("работает"))
-                    : i18n("Движок: словарь / edit-1 (LLM выключен)")
-                font.bold: true
-                opacity: 0.9
+                spacing: Kirigami.Units.smallSpacing
+
+                PlasmaComponents.BusyIndicator {
+                    visible: root.llmBusy
+                    running: root.llmBusy
+                    width: Kirigami.Units.iconSizes.small
+                    height: Kirigami.Units.iconSizes.small
+                }
+                PlasmaComponents.Label {
+                    Layout.fillWidth: true
+                    text: root.llmBusy
+                        ? i18n("Движок: %1 — анализирует…", root.llmName || "context")
+                        : (root.llmConfigured
+                            ? i18n("Движок: %1 — %2", root.llmName || "context",
+                                   root.llmOk === false ? i18n("ошибка") : i18n("работает"))
+                            : i18n("Движок: словарь / edit-1 (LLM выключен)"))
+                    font.bold: true
+                    opacity: 0.9
+                }
             }
             PlasmaComponents.Label {
                 visible: root.llmConfigured
@@ -294,11 +349,79 @@ PlasmoidItem {
                 opacity: 0.65
                 text: root.viaSummary
             }
-            PlasmaComponents.Label {
-                opacity: 0.55
-                font.pointSize: 7
-                text: i18n("История: switchfix spell-stats")
+        }
+
+        Kirigami.Separator {
+            Layout.fillWidth: true
+        }
+
+        // Recent corrections (from spell stats history).
+        PlasmaComponents.Label {
+            Layout.fillWidth: true
+            text: i18n("История исправлений")
+            font.bold: true
+            opacity: 0.9
+        }
+
+        PlasmaComponents.Label {
+            visible: root.history.length === 0
+            Layout.fillWidth: true
+            opacity: 0.55
+            text: i18n("Пока пусто — замены появятся здесь.")
+        }
+
+        // Newest first; keep the list short so the popup stays compact.
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 1
+
+            Repeater {
+                model: root.history.slice(0, 8)
+                delegate: RowLayout {
+                    id: histRow
+                    required property var modelData
+                    Layout.fillWidth: true
+                    spacing: Kirigami.Units.smallSpacing
+
+                    readonly property string action: modelData && modelData.action ? String(modelData.action) : ""
+                    readonly property string fromText: modelData && modelData.from ? String(modelData.from) : ""
+                    readonly property string toText: modelData && modelData.to ? String(modelData.to) : ""
+                    readonly property string viaText: modelData && modelData.via ? String(modelData.via) : ""
+
+                    PlasmaComponents.Label {
+                        text: root.actionLabel(histRow.action)
+                        color: root.actionColor(histRow.action)
+                        font.pointSize: 8
+                        Layout.preferredWidth: Kirigami.Units.gridUnit * 3.2
+                        elide: Text.ElideRight
+                    }
+                    PlasmaComponents.Label {
+                        Layout.fillWidth: true
+                        opacity: 0.85
+                        elide: Text.ElideRight
+                        text: {
+                            if (histRow.action === "veto" || histRow.action === "hint")
+                                return "«" + histRow.fromText + "»";
+                            if (!histRow.toText || histRow.toText === histRow.fromText)
+                                return "«" + histRow.fromText + "»";
+                            return "«" + histRow.fromText + "» → «" + histRow.toText + "»";
+                        }
+                    }
+                    PlasmaComponents.Label {
+                        visible: histRow.viaText !== "" && histRow.viaText !== "none"
+                        opacity: 0.5
+                        font.pointSize: 7
+                        text: histRow.viaText
+                    }
+                }
             }
+        }
+
+        PlasmaComponents.Label {
+            visible: root.history.length > 8
+            opacity: 0.45
+            font.pointSize: 7
+            text: i18n("Ещё %1 — switchfix spell-stats", root.history.length - 8)
         }
 
         RowLayout {

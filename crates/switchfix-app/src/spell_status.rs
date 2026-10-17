@@ -46,6 +46,8 @@ pub struct SpellStatus {
     pub llm_errors: u64,
     /// Last LLM latency in ms (0 = unknown).
     pub llm_last_ms: u64,
+    /// A context call is in flight (widget spinner).
+    pub llm_busy: bool,
 
     // --- outcomes ---
     pub replaced: u64,
@@ -101,6 +103,24 @@ impl SpellStatusStore {
         g.llm_calls = self.llm_calls.load(Ordering::Relaxed);
         g.llm_errors = self.llm_errors.load(Ordering::Relaxed);
         g.llm_last_ms = ms;
+        g.llm_busy = false;
+        self.persist(&g);
+    }
+
+    /// Mark the context backend as in-flight (clears on drop of the guard).
+    pub fn llm_busy(self: &Arc<Self>) -> LlmBusyGuard {
+        self.set_llm_busy(true);
+        LlmBusyGuard {
+            store: Arc::clone(self),
+        }
+    }
+
+    fn set_llm_busy(&self, busy: bool) {
+        let mut g = self.inner.lock().unwrap();
+        if g.llm_busy == busy {
+            return;
+        }
+        g.llm_busy = busy;
         self.persist(&g);
     }
 
@@ -168,6 +188,17 @@ impl SpellStatusStore {
     }
 }
 
+/// Clears `llm_busy` even if the context future is dropped mid-call.
+pub struct LlmBusyGuard {
+    store: Arc<SpellStatusStore>,
+}
+
+impl Drop for LlmBusyGuard {
+    fn drop(&mut self) {
+        self.store.set_llm_busy(false);
+    }
+}
+
 /// Read the last written status (for CLI / tests).
 pub fn read_spell_status() -> Option<SpellStatus> {
     let json = std::fs::read_to_string(spell_status_path()).ok()?;
@@ -210,6 +241,23 @@ mod tests {
         assert_eq!(snap.llm_calls, 2);
         assert_eq!(snap.llm_errors, 1);
         assert_eq!(snap.llm_ok, Some(false));
+        assert!(!snap.llm_busy);
+        let _ = std::fs::remove_file(spell_status_path());
+    }
+
+    #[test]
+    fn llm_busy_guard_sets_and_clears() {
+        let s = SpellStatusStore::new();
+        let _ = std::fs::remove_file(spell_status_path());
+        {
+            let _g = s.llm_busy();
+            assert!(s.snapshot().llm_busy);
+        }
+        assert!(!s.snapshot().llm_busy);
+        // note_llm also clears the flag (end of a call without a guard).
+        let _g = s.llm_busy();
+        s.note_llm(true, 10);
+        assert!(!s.snapshot().llm_busy);
         let _ = std::fs::remove_file(spell_status_path());
     }
 }

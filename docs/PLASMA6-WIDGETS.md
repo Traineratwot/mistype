@@ -320,7 +320,26 @@ Widget polls `switchfix suggest-peek` every ~400 ms. Output JSON:
     { "text": "привет", "kind": "SpellFix", "source_word": "приветт" }
   ],
   "can_add_to_dict": true,
-  "timeout_ms": 4000
+  "timeout_ms": 4000,
+  "llm": {
+    "configured": true,
+    "name": "llm",
+    "ok": true,
+    "busy": false,
+    "calls": 12,
+    "errors": 1,
+    "last_ms": 340
+  },
+  "stats": {
+    "replaced": 4,
+    "undone": 1,
+    "hints": 2,
+    "vetoes": 0,
+    "via": { "layout": 1, "dict": 1, "edit1": 1, "context": 1 },
+    "history": [
+      { "t_ms": 12000, "action": "replace", "from": "приветт", "to": "привет", "via": "context" }
+    ]
+  }
 }
 ```
 
@@ -330,6 +349,8 @@ Widget polls `switchfix suggest-peek` every ~400 ms. Output JSON:
 | `enabled` | not paused |
 | `slots` | active suggestions (panel list) |
 | `can_add_to_dict` | show «+ в словарь» |
+| `llm.busy` | context backend (LLM / LT) is correcting right now → widget spinner |
+| `stats.history` | last transforms (`replace` / `undo` / `hint` / `veto`), oldest first |
 
 Commands written by the widget:
 

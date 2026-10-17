@@ -53,14 +53,14 @@ systemctl --user start switchfix
 | E3 | Save clipboard text → convert selection → paste | Original clipboard content is back |
 | E4 | Kill daemon mid-conversion | No stuck keys; restart recovers |
 | E5 | `journalctl --user -u switchfix -f` | No typed text in logs (default config) |
-| E6 | Settings window: change hotkey, Save | `config.toml` updated; restart daemon to apply |
+| E6 | Settings window: change hotkey, Save | `config.toml` updated; daemon restarts itself and the new hotkey works |
 | E7 | Tray menu «Конвертировать выделение» | Same as Ctrl+F1 |
 | E8 | Two conversions in a row (word, then selection) | Both succeed; buffer cleared after word path |
 
 ## Known limitations (expected)
 
 - TUI full-screen apps (vim, tmux) are **not** supported in terminal mode.
-- Hotkey changes require a daemon restart (MVP).
+- Hotkey changes apply after Settings Save (daemon auto-restarts).
 - Non-text clipboard is not restored (M14).
 - Word-path only works when the caret is at the end of the word.
 - Without `input` group: no global hotkeys / no keystroke buffer — use tray or `switchfix convert`.

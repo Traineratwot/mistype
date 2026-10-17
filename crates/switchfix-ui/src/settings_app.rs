@@ -148,6 +148,19 @@ fn write_reload_flag() {
     let _ = std::fs::write(reload_flag_path(), token.to_string());
 }
 
+/// Ask the running daemon to fully restart (rebind hotkeys via re-exec).
+fn restart_flag_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("switchfix.restart")
+}
+
+fn write_restart_flag() {
+    let token = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let _ = std::fs::write(restart_flag_path(), token.to_string());
+}
+
 fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
     match message {
         Message::ToggleEnabled(v) => app.cfg.general.enabled_on_start = v,
@@ -249,10 +262,9 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
         }
         Message::Save => match app.store.save(&app.cfg) {
             Ok(()) => {
-                write_reload_flag();
-                app.status = "Сохранено. Перезапустите демон, чтобы хоткеи вступили в силу."
-                    .into();
-                info!("config saved from settings UI");
+                write_restart_flag();
+                app.status = "Сохранено. Демон перезапускается…".into();
+                info!("config saved from settings UI; daemon restart signaled");
             }
             Err(ConfigError::Io(e)) | Err(ConfigError::Parse(e)) => {
                 app.status = format!("Ошибка: {e}");
@@ -711,7 +723,7 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
                 text(
                     "Когда включено, нажатие хоткея не доходит до других программ \
                      (клавиша «съедается»). Обычная печать продолжает работать. \
-                     Требует группу input и перезапуск демона."
+                     Требует группу input. После сохранения демон перезапускается сам."
                 )
                 .size(13)
             )
@@ -720,7 +732,7 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
             .style(container::rounded_box),
             tooltip::Position::Bottom,
         ),
-        text("Изменения хоткеев вступают в силу после перезапуска демона.").size(12),
+        text("Сохранение применяет изменения и перезапускает демон автоматически.").size(12),
     ]
     .spacing(10);
 

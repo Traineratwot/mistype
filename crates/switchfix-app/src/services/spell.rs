@@ -663,6 +663,8 @@ impl SpellService {
             }
         };
         let t0 = std::time::Instant::now();
+        // Spinner for the widget while the (slow) context backend is working.
+        let _busy = self.stats.llm_busy();
         match ctx.correct(word, &sentence, lang).await {
             Ok(fixes) => {
                 self.stats.note_llm(true, t0.elapsed().as_millis() as u64);
