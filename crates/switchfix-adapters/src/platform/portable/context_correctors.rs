@@ -205,6 +205,21 @@ impl ProcessCorrector {
 
     /// One request/response over an existing handle. Leaves the process alive.
     async fn exchange(handle: &mut ProcHandle, line: &str) -> Result<String, SpellError> {
+        let timeout = if handle.used {
+            REQUEST_TIMEOUT
+        } else {
+            COLD_TIMEOUT
+        };
+        Self::exchange_with_timeout(handle, line, timeout).await
+    }
+
+    /// Same as [`Self::exchange`] but with an explicit deadline
+    /// (whole-text proofreading needs more than the single-word budget).
+    async fn exchange_with_timeout(
+        handle: &mut ProcHandle,
+        line: &str,
+        timeout: Duration,
+    ) -> Result<String, SpellError> {
         handle
             .stdin
             .write_all(line.as_bytes())
@@ -221,11 +236,6 @@ impl ProcessCorrector {
             .await
             .map_err(|e| SpellError::Failed(format!("llm flush: {e}")))?;
 
-        let timeout = if handle.used {
-            REQUEST_TIMEOUT
-        } else {
-            COLD_TIMEOUT
-        };
         let deadline = tokio::time::Instant::now() + timeout;
 
         // Skip non-answer lines (ready handshake, logs). Need one real reply.
@@ -309,6 +319,116 @@ impl ContextCorrector for ProcessCorrector {
             }
         }
     }
+
+    /// Whole-text proofread for the «LLM-fix selection» hotkey.
+    async fn correct_text(&self, text: &str, lang: &str) -> Result<String, SpellError> {
+        if self.cmd.is_empty() {
+            return Ok(text.to_string());
+        }
+        let input = serde_json::json!({
+            "cmd": "fix_text",
+            "text": text,
+            "lang": lang,
+        })
+        .to_string();
+
+        let mut guard = self.inner.lock().await;
+        let need_spawn = match guard.as_mut() {
+            None => true,
+            Some(h) => matches!(h.child.try_wait(), Ok(Some(_)) | Err(_)),
+        };
+        if need_spawn {
+            *guard = Some(Self::spawn(&self.cmd).await?);
+        }
+        let handle = guard.as_mut().expect("just spawned");
+        // Whole-text proofreading takes much longer than a single-word fix.
+        match Self::exchange_with_timeout(handle, &input, FIX_TEXT_TIMEOUT).await {
+            Ok(reply) => {
+                debug!("fix_text reply ({} B): {:.200}", reply.len(), reply);
+                let fixed = parse_fix_text_reply(&reply, text);
+                Ok(fixed)
+            }
+            Err(e) => {
+                warn!("llm correct_text: {e} — restarting");
+                *guard = None;
+                Err(SpellError::Failed(format!("llm: {e}")))
+            }
+        }
+    }
+}
+
+/// Whole-text LLM calls generate many tokens — give the model room.
+const FIX_TEXT_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Parse a whole-text fix reply: `{"text":"..."}` or the raw corrected text.
+/// Tiny models often append commentary after the fixed text — keep only the
+/// first line / sentence.
+fn parse_fix_text_reply(reply: &str, original: &str) -> String {
+    let reply = reply.trim();
+    if reply.is_empty() {
+        return original.to_string();
+    }
+    let body = if let Ok(v) = serde_json::from_str::<serde_json::Value>(reply) {
+        if v.get("is_ok").and_then(|x| x.as_bool()).unwrap_or(false)
+            && v.get("text").is_none()
+        {
+            return original.to_string();
+        }
+        v.get("text")
+            .and_then(|x| x.as_str())
+            .unwrap_or(original)
+            .to_string()
+    } else {
+        reply.to_string()
+    };
+
+    // Keep the first non-empty line — that is the corrected text. The rest is
+    // usually model commentary ("The text has been corrected…") or a degenerate
+    // few-shot echo loop.
+    let first = body
+        .lines()
+        .map(|l| l.trim())
+        .find(|l| !l.is_empty() && !l.starts_with("Text:") && !l.starts_with("Fixed:"))
+        .unwrap_or(original);
+    let first = first
+        .strip_prefix("Fixed:")
+        .or_else(|| first.strip_prefix("fixed:"))
+        .or_else(|| first.strip_prefix("Исправлено:"))
+        .unwrap_or(first)
+        .trim();
+    // Drop a trailing commentary fragment after a sentence end + capital word.
+    let first = split_before_commentary(first);
+    if first.is_empty() || first == original {
+        // First line was garbage equal to input — try any later "clean" line.
+        for l in body.lines().map(|l| l.trim()).skip(1) {
+            if l.is_empty() || l.starts_with("Text:") || l.starts_with("Fixed:") {
+                continue;
+            }
+            let l = split_before_commentary(l);
+            if !l.is_empty() && l != original && l.chars().all(|c| !c.is_control()) {
+                return l.to_string();
+            }
+        }
+        return original.to_string();
+    }
+    first.to_string()
+}
+
+/// Cut off trailing LLM commentary ("The text has been corrected…").
+fn split_before_commentary(s: &str) -> String {
+    for marker in [
+        "\nThe text",
+        "\nThe corrected",
+        "\nИсправлено",
+        "\nCommentary",
+        " The text has been",
+        " The corrected text",
+    ] {
+        if let Some(i) = s.find(marker) {
+            return s[..i].trim().to_string();
+        }
+    }
+    s.trim().to_string()
 }
 
 fn parse_process_output(text: &str, word: &str) -> Vec<ContextFix> {

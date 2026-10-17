@@ -8,6 +8,7 @@
 #
 #   make spell W=приветт
 #   make stop | status | restart
+#   make widget | plasma-restart   — update / reload the Plasma plasmoid
 
 BIN        := ./target/release/switchfix
 CARGO      ?= cargo
@@ -19,7 +20,7 @@ W          ?= приветт
 .PHONY: all build debug test test-verbose clippy fmt \
         run run-fg restart stop status logs logs-history \
         doctor selftest beep settings spell suggest-bar \
-        setup install clean watch
+        setup install clean watch widget plasma-restart
 
 all: build
 
@@ -119,6 +120,21 @@ setup: build ## privileged setup (usermod / udev), interactive
 
 install: build ## install .desktop + udev rule (packaging/install.sh)
 	./packaging/install.sh
+
+## Plasma widget
+
+PLASMOID_ID   := org.switchfix.suggestions
+PLASMOID_SRC  := packaging/plasmoid/$(PLASMOID_ID)
+PLASMOID_DST  := $(HOME)/.local/share/plasma/plasmoids/$(PLASMOID_ID)
+
+widget: ## copy plasmoid → ~/.local/share + restart plasmashell
+	@mkdir -p $(PLASMOID_DST)/contents/ui
+	@cp -v $(PLASMOID_SRC)/metadata.json $(PLASMOID_DST)/
+	@cp -v $(PLASMOID_SRC)/contents/ui/main.qml $(PLASMOID_DST)/contents/ui/
+	@$(MAKE) --no-print-directory plasma-restart
+
+plasma-restart: ## systemctl --user restart plasma-plasmashell.service
+	systemctl --user restart plasma-plasmashell.service
 
 ## One-shot CLI helpers
 

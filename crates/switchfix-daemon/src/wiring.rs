@@ -112,8 +112,12 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
         ) {
             Some(ctx) => {
                 let name = ctx.name();
-                svc.set_context_corrector(std::sync::Arc::from(ctx));
+                let arc: std::sync::Arc<dyn switchfix_app::ports::ContextCorrector> =
+                    std::sync::Arc::from(ctx);
+                svc.set_context_corrector(arc.clone());
                 svc.set_context_status(true, name);
+                // Also feed the «LLM-fix selection» hotkey in CorrectionService.
+                service.set_context_corrector(arc);
             }
             None => {
                 svc.set_context_status(false, "");
@@ -201,6 +205,9 @@ pub fn spawn_tray_dispatcher(
                 }
                 TrayCommand::ConvertSelection => {
                     let _ = service.handle(CorrectionRequest::ConvertSelection).await;
+                }
+                TrayCommand::LlmFixSelection => {
+                    let _ = service.handle(CorrectionRequest::LlmFixSelection).await;
                 }
                 TrayCommand::OpenSettings => on_settings(),
                 TrayCommand::Quit => {

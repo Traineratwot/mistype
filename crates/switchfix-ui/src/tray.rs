@@ -17,6 +17,7 @@ use tracing::info;
 pub enum TrayCommand {
     ToggleEnabled,
     ConvertSelection,
+    LlmFixSelection,
     OpenSettings,
     Quit,
     /// Accept a suggestion slot (1-based).
@@ -32,6 +33,8 @@ pub struct TrayModel {
     pub enabled: AtomicBool,
     /// On while the icon should blink after a hotkey.
     pub flash: AtomicBool,
+    /// On while the LLM is processing a selection (yellow blink).
+    pub busy: AtomicBool,
     pub cmd_tx: mpsc::Sender<TrayCommand>,
     /// Current suggestion slots (labels for the menu), empty when none.
     suggestions: std::sync::Mutex<Option<(String, Vec<String>, bool)>>,
@@ -42,6 +45,7 @@ impl TrayModel {
         Arc::new(Self {
             enabled: AtomicBool::new(enabled),
             flash: AtomicBool::new(false),
+            busy: AtomicBool::new(false),
             cmd_tx,
             suggestions: std::sync::Mutex::new(None),
         })
@@ -57,6 +61,10 @@ impl TrayModel {
 
     pub fn is_flashing(&self) -> bool {
         self.flash.load(Ordering::SeqCst)
+    }
+
+    pub fn is_busy(&self) -> bool {
+        self.busy.load(Ordering::SeqCst)
     }
 
     /// Update the suggestion menu contents. `None` clears them.
@@ -103,6 +111,33 @@ impl TrayHandle {
         });
     }
 
+    /// Yellow blinking while the LLM is working on a selection.
+    /// Call `set_busy(false)` when done (or `true` again to keep going).
+    pub fn set_busy(&self, busy: bool) {
+        self.model.busy.store(busy, Ordering::SeqCst);
+        self.handle.update(|_| ());
+        if !busy {
+            return;
+        }
+        // Blink loop: redraw every 400 ms while busy so the icon alternates.
+        let model = self.model.clone();
+        let handle = self.handle.clone();
+        tokio::spawn(async move {
+            while model.is_busy() {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                if !model.is_busy() {
+                    break;
+                }
+                // Toggle the flash bit to alternate yellow/gray.
+                let cur = model.flash.load(Ordering::SeqCst);
+                model.flash.store(!cur, Ordering::SeqCst);
+                handle.update(|_| ());
+            }
+            model.flash.store(false, Ordering::SeqCst);
+            handle.update(|_| ());
+        });
+    }
+
     /// Force a tray redraw (menu / tooltip refresh).
     pub fn refresh(&self) {
         self.handle.update(|_| ());
@@ -116,7 +151,11 @@ impl TrayHandle {
 }
 
 fn flash_color() -> (u8, u8, u8) {
-    (0xff, 0xc1, 0x07) // amber — clearly different from green/gray
+    (0xff, 0xc1, 0x07) // amber/yellow — clearly different from green/gray
+}
+
+fn busy_color() -> (u8, u8, u8) {
+    (0xff, 0xd6, 0x00) // bright yellow — LLM is working
 }
 
 impl Tray for SwitchFixTray {
@@ -129,7 +168,9 @@ impl Tray for SwitchFixTray {
     }
 
     fn icon_name(&self) -> String {
-        if self.model.is_flashing() {
+        if self.model.is_busy() {
+            "view-refresh".into()
+        } else if self.model.is_flashing() {
             "notification-message-im".into()
         } else if self.model.is_enabled() {
             "input-keyboard".into()
@@ -139,7 +180,9 @@ impl Tray for SwitchFixTray {
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
-        let (r, g, b) = if self.model.is_flashing() {
+        let (r, g, b) = if self.model.is_busy() {
+            busy_color()
+        } else if self.model.is_flashing() {
             flash_color()
         } else if self.model.is_enabled() {
             (0x2e, 0xcc, 0x71)
@@ -162,7 +205,9 @@ impl Tray for SwitchFixTray {
             icon_name: self.icon_name(),
             icon_pixmap: self.icon_pixmap(),
             title: "SwitchFix".into(),
-            description: if self.model.is_flashing() {
+            description: if self.model.is_busy() {
+                "LLM исправляет текст…".into()
+            } else if self.model.is_flashing() {
                 "Горячая клавиша…".into()
             } else if self.model.is_enabled() {
                 "Включён".into()
@@ -190,6 +235,13 @@ impl Tray for SwitchFixTray {
                 label: "Исправить выделенный текст".into(),
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.model.cmd_tx.try_send(TrayCommand::ConvertSelection);
+                }),
+                ..Default::default()
+            }),
+            MenuItem::Standard(StandardItem {
+                label: "LLM: исправить выделенное".into(),
+                activate: Box::new(|this: &mut Self| {
+                    let _ = this.model.cmd_tx.try_send(TrayCommand::LlmFixSelection);
                 }),
                 ..Default::default()
             }),

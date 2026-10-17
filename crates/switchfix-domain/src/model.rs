@@ -60,6 +60,9 @@ pub enum CorrectionRequest {
     /// Internal: selection convert with terminal erase/paste strategy
     /// (auto-selected when the focused app is a terminal).
     ConvertTerminal,
+    /// Send the whole selection to the LLM context backend and replace it
+    /// with the corrected text. Explicit hotkey — never auto.
+    LlmFixSelection,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

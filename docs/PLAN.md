@@ -310,7 +310,7 @@ When the focused app matches `behavior.terminal_apps`, ConvertSelection uses
 ### Toggle / Settings / Quit
 
 - **Toggle:** `enabled=!enabled`, icon update, `buffer.clear()` (privacy), notify.
-- **Settings:** spawn `switchfix settings` (iced, отдельный процесс); hotkey-изменения — restart в MVP.
+- **Settings:** spawn `switchfix settings` (iced, отдельный процесс); Save → daemon auto-restart (re-exec).
 - **Quit:** cancel token → join hotkey → drop uinput → D-Bus unsubscribe → exit.
 
 ### State machine

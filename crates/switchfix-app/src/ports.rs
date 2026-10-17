@@ -102,6 +102,7 @@ pub enum HotkeyEvent {
     ConvertSelection,
     ToggleEnabled,
     FixSpelling,
+    LlmFixSelection,
     AcceptSuggestion(u8),
     AddToDictionary,
     DismissSuggestions,
@@ -261,6 +262,13 @@ pub trait ContextCorrector: Send + Sync {
         context: &str,
         lang: &str,
     ) -> Result<Vec<ContextFix>, SpellError>;
+
+    /// Fix spelling/grammar of a whole text block (the «LLM-fix selection»
+    /// hotkey). Returns the corrected text; `Ok(original)` means no change.
+    /// Backends that cannot do whole-text correction just return the input.
+    async fn correct_text(&self, text: &str, _lang: &str) -> Result<String, SpellError> {
+        Ok(text.to_string())
+    }
 }
 
 /// Floating suggestion bar (layer-shell strip on KDE Wayland).

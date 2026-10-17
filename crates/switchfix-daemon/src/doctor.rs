@@ -239,8 +239,16 @@ pub async fn run() -> DoctorReport {
             "hotkeys".into(),
             true,
             format!(
-                "selection=[{}]  toggle=[{}]  fix-spelling=[{}]",
-                cfg.hotkeys.convert_selection, cfg.hotkeys.toggle_enabled, cfg.hotkeys.fix_spelling
+                "selection=[{}]  toggle=[{}]  fix-spelling=[{}]  llm-fix=[{}]{}",
+                cfg.hotkeys.convert_selection,
+                cfg.hotkeys.toggle_enabled,
+                cfg.hotkeys.fix_spelling,
+                cfg.hotkeys.llm_fix_selection,
+                if cfg.spell.llm_selection {
+                    ""
+                } else {
+                    " (disabled)"
+                }
             ),
         ));
 

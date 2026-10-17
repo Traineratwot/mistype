@@ -193,23 +193,25 @@ async fn main() -> anyhow::Result<()> {
         Command::SuggestPeek => {
             // Combined status for the Plasma widget: daemon liveness + tips.
             let hb = switchfix_adapters::read_daemon_heartbeat();
+            let daemon_alive = hb.is_some();
             let sug = std::fs::read_to_string(switchfix_adapters::suggest_state_path())
                 .ok()
                 .and_then(|j| serde_json::from_str::<switchfix_app::ports::SuggestionUi>(&j).ok());
             let spell_st = switchfix_app::read_spell_status();
             let json = serde_json::json!({
-                "daemon": hb.is_some(),
+                "daemon": daemon_alive,
                 "enabled": hb.map(|h| h.enabled).unwrap_or(false),
                 "original": sug.as_ref().map(|s| s.original.clone()).unwrap_or_default(),
                 "slots": sug.as_ref().map(|s| s.slots.clone()).unwrap_or_default(),
                 "can_add_to_dict": sug.as_ref().map(|s| s.can_add_to_dict).unwrap_or(false),
                 "timeout_ms": sug.as_ref().map(|s| s.timeout_ms).unwrap_or(0),
                 // LLM / hybrid diagnostics for the widget + `spell-stats`.
+                // `busy` is ignored when the daemon is gone (stale flag after a crash).
                 "llm": spell_st.as_ref().map(|s| serde_json::json!({
                     "configured": s.llm_configured,
                     "name": s.llm_name,
                     "ok": s.llm_ok,
-                    "busy": s.llm_busy,
+                    "busy": daemon_alive && s.llm_busy,
                     "calls": s.llm_calls,
                     "errors": s.llm_errors,
                     "last_ms": s.llm_last_ms,
@@ -508,6 +510,18 @@ async fn run_daemon() -> anyhow::Result<()> {
                             HotkeyEvent::ConvertSelection => {
                                 let out = service.handle(CorrectionRequest::ConvertSelection).await;
                                 info!("correction outcome: {out:?}");
+                            }
+                            HotkeyEvent::LlmFixSelection => {
+                                // Yellow blink while the LLM thinks, then replace.
+                                tray_handle.set_busy(true);
+                                let out = service
+                                    .handle(CorrectionRequest::LlmFixSelection)
+                                    .await;
+                                tray_handle.set_busy(false);
+                                info!("llm-fix outcome: {out:?}");
+                                if out.is_success() {
+                                    switchfix_ui::play_fix_sound();
+                                }
                             }
                             HotkeyEvent::ToggleEnabled => {
                                 service.toggle_enabled().await;

@@ -61,6 +61,7 @@ sg input -c './target/release/switchfix daemon'
 |--------|-------------|
 | Convert selection | `ctrl+alt+r` |
 | Fix spelling of last word | `ctrl+alt+f` |
+| LLM-fix selection (whole selection → LLM → replace) | `alt+r` |
 | Toggle enabled | `ctrl+alt+t` |
 | Accept suggestion slot 1–3 (while bar visible) | `ctrl+alt+1` … `ctrl+alt+3` — **configurable in Settings** |
 | Add word to dictionary (while bar visible) | `ctrl+alt+0` |
@@ -235,9 +236,11 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 `AppConfig` in `switchfix-app/src/config.rs` (`Default` + `validate()`):
 
 - `general.enabled_on_start`, `language`
-- `hotkeys.convert_selection / toggle_enabled / fix_spelling`
+- `hotkeys.convert_selection / toggle_enabled / fix_spelling / llm_fix_selection`
   — grammar `ctrl+shift+f1`, `insert`, `capslock`, `home`, … (`HotkeyBinding::parse`)
   — **empty string = action disabled** (Esc in Settings resets the field)
+  — `llm_fix_selection` (default `alt+r`) sends the whole selection to the LLM
+    and replaces it; toggle with `spell.llm_selection` (default `true`).
 - `hotkeys.hotkey_consume` (default **true**) — EVIOCGRAB + passthrough
 - `hotkeys.use_portal_hotkeys` — **flag only, not implemented**
 - `behavior.copy_settle_ms`, `behavior.paste_settle_ms`

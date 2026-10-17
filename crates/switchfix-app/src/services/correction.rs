@@ -13,8 +13,8 @@ use tracing::{debug, warn};
 
 use crate::config::AppConfig;
 use crate::ports::{
-    CapturedSelection, ClipboardPort, FocusMonitor, LayoutSwitcher, Notifier, NotifyLevel,
-    SavedClipboard, SelectionCapture, TextInjector, TypingBufferPort,
+    CapturedSelection, ClipboardPort, ContextCorrector, FocusMonitor, LayoutSwitcher, Notifier,
+    NotifyLevel, SavedClipboard, SelectionCapture, TextInjector, TypingBufferPort,
 };
 
 /// Orchestrates capture → convert → replace → switch-layout.
@@ -26,6 +26,8 @@ pub struct CorrectionService {
     layouts: Arc<dyn LayoutSwitcher>,
     notifier: Arc<dyn Notifier>,
     focus: Option<Arc<dyn FocusMonitor>>,
+    /// Optional hybrid backend for the «LLM-fix selection» hotkey.
+    context: std::sync::Mutex<Option<Arc<dyn ContextCorrector>>>,
     tables: std::sync::RwLock<ConversionSet>,
     config: watch::Receiver<AppConfig>,
     enabled: AtomicBool,
@@ -80,11 +82,17 @@ impl CorrectionService {
             layouts,
             notifier,
             focus,
+            context: std::sync::Mutex::new(None),
             tables: std::sync::RwLock::new(tables),
             config,
             enabled: AtomicBool::new(enabled),
             state_tx,
         }
+    }
+
+    /// Install the hybrid context backend used by `LlmFixSelection`.
+    pub fn set_context_corrector(&self, ctx: Arc<dyn ContextCorrector>) {
+        *self.context.lock().unwrap() = Some(ctx);
     }
 
     /// Swap conversion tables at runtime (config reload).
@@ -179,6 +187,7 @@ impl CorrectionService {
         let outcome = match req {
             CorrectionRequest::ConvertSelection => self.convert_selection().await,
             CorrectionRequest::ConvertTerminal => self.convert_terminal().await,
+            CorrectionRequest::LlmFixSelection => self.llm_fix_selection().await,
         };
 
         let next = match &outcome {
@@ -218,6 +227,120 @@ impl CorrectionService {
         };
 
         self.replace_via_clipboard(captured).await
+    }
+
+    /// `LlmFixSelection` hotkey: capture the selection, send the whole text
+    /// to the context backend (LLM), replace the selection with the result.
+    /// Explicit action only — never part of auto-replace.
+    async fn llm_fix_selection(&self) -> CorrectionOutcome {
+        let cfg = self.cfg();
+        if !cfg.spell.llm_selection {
+            debug!("llm_fix_selection: feature disabled in settings");
+            return CorrectionOutcome::Disabled;
+        }
+        let Some(ctx) = self.context.lock().unwrap().clone() else {
+            warn!("llm_fix_selection: no context backend (set llm_cmd / lt_url)");
+            let _ = self
+                .notifier
+                .notify(
+                    "LLM-исправление недоступно: не настроен llm_cmd или lt_url",
+                    NotifyLevel::Warning,
+                )
+                .await;
+            return CorrectionOutcome::Failed("no context backend".into());
+        };
+
+        let captured = match self.selection.capture_selection().await {
+            Ok(Some(sel)) => sel,
+            Ok(None) => return CorrectionOutcome::NoInputFound,
+            Err(e) => {
+                warn!("selection capture failed: {e}");
+                return CorrectionOutcome::Failed(e.to_string());
+            }
+        };
+
+        let text = captured.text.trim().to_string();
+        if text.is_empty() {
+            self.restore_clipboard(captured.saved, &cfg).await;
+            return CorrectionOutcome::NoInputFound;
+        }
+
+        // Guess language from the majority script of the selection.
+        let lang = switchfix_domain::detect_lang(&text).unwrap_or("ru");
+
+        let _ = self.state_tx.send(CorrectionState::Capturing);
+        let corrected = match ctx.correct_text(&text, lang).await {
+            Ok(t) => t,
+            Err(e) => {
+                warn!("llm correct_text failed: {e}");
+                self.restore_clipboard(captured.saved, &cfg).await;
+                let _ = self
+                    .notifier
+                    .notify("LLM не ответил — текст не изменён", NotifyLevel::Error)
+                    .await;
+                return CorrectionOutcome::Failed(format!("llm: {e}"));
+            }
+        };
+
+        let corrected = corrected.trim().to_string();
+        if corrected.is_empty() || corrected == text {
+            debug!("llm_fix_selection: no changes");
+            self.restore_clipboard(captured.saved, &cfg).await;
+            let _ = self
+                .notifier
+                .notify("LLM не нашёл исправлений", NotifyLevel::Info)
+                .await;
+            return CorrectionOutcome::NoInputFound;
+        }
+
+        self.replace_with_text(captured, text, corrected).await
+    }
+
+    /// Paste `new_text` over the captured selection (no layout convert).
+    async fn replace_with_text(
+        &self,
+        captured: CapturedSelection,
+        original: String,
+        new_text: String,
+    ) -> CorrectionOutcome {
+        let cfg = self.cfg();
+        let CapturedSelection { saved, .. } = captured;
+
+        let _ = self.state_tx.send(CorrectionState::Replacing);
+        if let Err(e) = self.clipboard.put_text(&new_text).await {
+            self.restore_clipboard(saved, &cfg).await;
+            return CorrectionOutcome::Failed(format!("clipboard put: {e}"));
+        }
+
+        let paste_ok = match self.clipboard.get_text().await {
+            Ok(t) => t == new_text,
+            Err(e) => {
+                debug!("clipboard verify: {e}");
+                false
+            }
+        };
+
+        if paste_ok {
+            if let Err(e) = self.injector.chord(KeyChord::CtrlV).await {
+                self.restore_clipboard(saved, &cfg).await;
+                return CorrectionOutcome::Failed(format!("paste: {e}"));
+            }
+        } else {
+            debug!("clipboard offer missing — typing over selection");
+            if let Err(e) = self.injector.type_text(&new_text, &LayoutId::new("us")).await {
+                self.restore_clipboard(saved, &cfg).await;
+                return CorrectionOutcome::Failed(format!("type_text: {e}"));
+            }
+        }
+
+        tokio::time::sleep(Duration::from_millis(cfg.behavior.paste_settle_ms)).await;
+        self.restore_clipboard(saved, &cfg).await;
+
+        CorrectionOutcome::Converted {
+            original,
+            converted: new_text,
+            layout_switched_to: None,
+        }
     }
 
     async fn convert_terminal(&self) -> CorrectionOutcome {
@@ -711,5 +834,100 @@ mod tests {
         assert!(log.iter().any(|l| l.contains("CtrlA")), "log={log:?}");
         assert!(log.iter().any(|l| l.contains("CtrlK")), "log={log:?}");
         assert!(log.iter().any(|l| l.contains("CtrlShiftV")), "log={log:?}");
+    }
+
+    struct FakeCtx {
+        fixed: String,
+    }
+
+    #[async_trait]
+    impl ContextCorrector for FakeCtx {
+        fn name(&self) -> &'static str {
+            "fake-llm"
+        }
+        async fn correct(
+            &self,
+            _word: &str,
+            _context: &str,
+            _lang: &str,
+        ) -> Result<Vec<crate::ports::ContextFix>, crate::ports::SpellError> {
+            Ok(vec![])
+        }
+        async fn correct_text(
+            &self,
+            _text: &str,
+            _lang: &str,
+        ) -> Result<String, crate::ports::SpellError> {
+            Ok(self.fixed.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn llm_fix_selection_replaces_with_corrected_text() {
+        let (svc, inj, clip, _b) = service(Some("он ачала говорить".into()), None, false, true);
+        svc.set_context_corrector(Arc::new(FakeCtx {
+            fixed: "он начал говорить".into(),
+        }));
+        let out = svc.handle(CorrectionRequest::LlmFixSelection).await;
+        assert!(out.is_success(), "{out:?}");
+        assert_eq!(
+            out,
+            CorrectionOutcome::Converted {
+                original: "он ачала говорить".into(),
+                converted: "он начал говорить".into(),
+                layout_switched_to: None,
+            }
+        );
+        // Corrected text went to the clipboard (then restored afterwards).
+        let clog = clip.log.lock().unwrap().clone();
+        assert!(
+            clog.iter().any(|l| l == "put:он начал говорить"),
+            "clipboard log={clog:?}"
+        );
+        let log = inj.log.lock().unwrap().clone();
+        assert!(log.iter().any(|l| l.contains("CtrlV")), "log={log:?}");
+    }
+
+    #[tokio::test]
+    async fn llm_fix_selection_no_changes_is_noop() {
+        let (svc, _i, _c, _b) = service(Some("уже хорошо".into()), None, false, true);
+        svc.set_context_corrector(Arc::new(FakeCtx {
+            fixed: "уже хорошо".into(),
+        }));
+        let out = svc.handle(CorrectionRequest::LlmFixSelection).await;
+        assert_eq!(out, CorrectionOutcome::NoInputFound);
+    }
+
+    #[tokio::test]
+    async fn llm_fix_selection_respects_disable_flag() {
+        let injector = Arc::new(FakeInjector::default());
+        let clipboard = Arc::new(FakeClipboard::default());
+        let selection = Arc::new(FakeSelection {
+            text: Some("текст".into()),
+        });
+        let buffer = Arc::new(FakeBuffer::default());
+        let layouts = Arc::new(FakeLayouts { fail: false });
+        let notifier = Arc::new(FakeNotifier::default());
+        let (_tx, rx) = watch::channel({
+            let mut c = AppConfig::default();
+            c.spell.llm_selection = false;
+            c
+        });
+        let svc = CorrectionService::new(
+            injector,
+            clipboard,
+            selection,
+            buffer,
+            layouts,
+            notifier,
+            ConversionSet::en_ru(),
+            rx,
+            true,
+        );
+        svc.set_context_corrector(Arc::new(FakeCtx {
+            fixed: "другое".into(),
+        }));
+        let out = svc.handle(CorrectionRequest::LlmFixSelection).await;
+        assert_eq!(out, CorrectionOutcome::Disabled);
     }
 }

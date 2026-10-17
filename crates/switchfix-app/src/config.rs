@@ -84,6 +84,10 @@ pub struct Hotkeys {
     pub toggle_enabled: String,
     #[serde(default = "hk_fix_spelling")]
     pub fix_spelling: String,
+    /// Send the whole selection to LLM and replace it with the corrected text.
+    /// Empty string = action disabled.
+    #[serde(default = "hk_llm_fix_selection")]
+    pub llm_fix_selection: String,
     /// Accept Nth suggestion while the bar is visible (max 3).
     #[serde(default = "hk_accept1")]
     pub accept_suggestion_1: String,
@@ -109,6 +113,9 @@ fn hk_toggle() -> String {
 fn hk_fix_spelling() -> String {
     "ctrl+alt+f".into()
 }
+fn hk_llm_fix_selection() -> String {
+    "alt+r".into()
+}
 fn hk_accept1() -> String {
     "ctrl+alt+1".into()
 }
@@ -125,6 +132,7 @@ impl Default for Hotkeys {
             convert_selection: hk_sel(),
             toggle_enabled: hk_toggle(),
             fix_spelling: hk_fix_spelling(),
+            llm_fix_selection: hk_llm_fix_selection(),
             accept_suggestion_1: hk_accept1(),
             accept_suggestion_2: hk_accept2(),
             accept_suggestion_3: hk_accept3(),
@@ -302,6 +310,9 @@ pub struct Spell {
     /// user can keep typing without the next word being torn by a replace.
     #[serde(default = "def_debounce_ms")]
     pub debounce_ms: u64,
+    /// Master switch for the «LLM-fix selection» hotkey feature (not auto-replace).
+    #[serde(default = "def_true")]
+    pub llm_selection: bool,
 }
 
 fn def_spell_mode() -> String {
@@ -359,6 +370,7 @@ impl Default for Spell {
             llm_cmd: def_empty(),
             context_chars: def_context_chars(),
             debounce_ms: def_debounce_ms(),
+            llm_selection: true,
         }
     }
 }
@@ -417,6 +429,7 @@ impl AppConfig {
             ("hotkeys.convert_selection", &self.hotkeys.convert_selection),
             ("hotkeys.toggle_enabled", &self.hotkeys.toggle_enabled),
             ("hotkeys.fix_spelling", &self.hotkeys.fix_spelling),
+            ("hotkeys.llm_fix_selection", &self.hotkeys.llm_fix_selection),
         ] {
             // Empty = action disabled (Esc reset in the settings UI).
             if value.trim().is_empty() {

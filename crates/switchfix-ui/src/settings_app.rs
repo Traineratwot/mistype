@@ -41,17 +41,19 @@ pub enum HotkeyField {
     Selection,
     Toggle,
     FixSpelling,
+    LlmFixSelection,
     Accept1,
     Accept2,
     Accept3,
 }
 
 impl HotkeyField {
-    pub const COUNT: usize = 6;
+    pub const COUNT: usize = 7;
     pub const ALL: [HotkeyField; Self::COUNT] = [
         HotkeyField::Selection,
         HotkeyField::Toggle,
         HotkeyField::FixSpelling,
+        HotkeyField::LlmFixSelection,
         HotkeyField::Accept1,
         HotkeyField::Accept2,
         HotkeyField::Accept3,
@@ -62,9 +64,10 @@ impl HotkeyField {
             HotkeyField::Selection => 0,
             HotkeyField::Toggle => 1,
             HotkeyField::FixSpelling => 2,
-            HotkeyField::Accept1 => 3,
-            HotkeyField::Accept2 => 4,
-            HotkeyField::Accept3 => 5,
+            HotkeyField::LlmFixSelection => 3,
+            HotkeyField::Accept1 => 4,
+            HotkeyField::Accept2 => 5,
+            HotkeyField::Accept3 => 6,
         }
     }
 
@@ -73,6 +76,7 @@ impl HotkeyField {
             HotkeyField::Selection => &cfg.hotkeys.convert_selection,
             HotkeyField::Toggle => &cfg.hotkeys.toggle_enabled,
             HotkeyField::FixSpelling => &cfg.hotkeys.fix_spelling,
+            HotkeyField::LlmFixSelection => &cfg.hotkeys.llm_fix_selection,
             HotkeyField::Accept1 => &cfg.hotkeys.accept_suggestion_1,
             HotkeyField::Accept2 => &cfg.hotkeys.accept_suggestion_2,
             HotkeyField::Accept3 => &cfg.hotkeys.accept_suggestion_3,
@@ -84,6 +88,7 @@ impl HotkeyField {
             HotkeyField::Selection => cfg.hotkeys.convert_selection = value,
             HotkeyField::Toggle => cfg.hotkeys.toggle_enabled = value,
             HotkeyField::FixSpelling => cfg.hotkeys.fix_spelling = value,
+            HotkeyField::LlmFixSelection => cfg.hotkeys.llm_fix_selection = value,
             HotkeyField::Accept1 => cfg.hotkeys.accept_suggestion_1 = value,
             HotkeyField::Accept2 => cfg.hotkeys.accept_suggestion_2 = value,
             HotkeyField::Accept3 => cfg.hotkeys.accept_suggestion_3 = value,
@@ -107,6 +112,7 @@ pub enum Message {
     ToggleSpell(bool),
     SpellMode(String),
     ToggleSpellSound(bool),
+    ToggleLlmSelection(bool),
     Language(String),
     StartCapture(HotkeyField),
     CancelCapture,
@@ -166,6 +172,7 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
         Message::ToggleEnabled(v) => app.cfg.general.enabled_on_start = v,
         Message::ToggleTypingBuffer(v) => app.cfg.privacy.typing_buffer = v,
         Message::ToggleHotkeyConsume(v) => app.cfg.hotkeys.hotkey_consume = v,
+        Message::ToggleLlmSelection(v) => app.cfg.spell.llm_selection = v,
         Message::ToggleSpell(v) => app.cfg.spell.enabled = v,
         Message::SpellMode(m) => app.cfg.spell.mode = m,
         Message::ToggleSpellSound(v) => app.cfg.spell.sound = v,
@@ -557,17 +564,31 @@ fn combo_from_mods(mods: &HotkeyMods, base: &str) -> String {
     parts.join("+")
 }
 
-/// Per-hotkey row: title, capture button, and its own modifier checkboxes.
+/// Semantic section card: rounded box with a title and body content.
+fn section_card<'a>(
+    title: &'a str,
+    body: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    container(
+        column![text(title).size(18), body.into()].spacing(12),
+    )
+    .padding([16, 18])
+    .width(Length::Fill)
+    .style(container::rounded_box)
+    .into()
+}
+
+/// Per-hotkey row: concrete title, short description, capture button, modifiers.
 fn hotkey_row<'a>(
     title: &'a str,
-    hint: &'a str,
+    desc: &'a str,
     value: &'a str,
     field: HotkeyField,
     capturing: bool,
     mods: HotkeyMods,
 ) -> Element<'a, Message> {
     let btn_label = if capturing {
-        "… нажмите сочетание (Esc — отмена)".to_string()
+        "… нажмите сочетание (Esc — сброс)".to_string()
     } else if value.trim().is_empty() {
         "— не назначено —".to_string()
     } else {
@@ -579,7 +600,7 @@ fn hotkey_row<'a>(
     let capture = mouse_area(
         container(text(btn_label).size(14))
             .padding([8, 14])
-            .width(Length::Fixed(220.0))
+            .width(Length::Fixed(230.0))
             .style(if capturing {
                 container::rounded_box
             } else {
@@ -596,42 +617,18 @@ fn hotkey_row<'a>(
     ]
     .spacing(10);
 
-    let label = text(title).width(Length::Fixed(200.0));
-
-    tooltip(
-        column![
-            row![label, capture].spacing(12).align_y(iced::Alignment::Center),
-            row![text("").width(Length::Fixed(200.0)), mod_boxes]
-                .spacing(12)
-                .align_y(iced::Alignment::Center),
-        ]
-        .spacing(4),
-        container(text(hint).size(13))
-            .padding(10)
-            .width(Length::Fixed(340.0))
-            .style(container::rounded_box),
-        tooltip::Position::Bottom,
-    )
+    column![
+        text(title).size(15),
+        text(desc).size(12),
+        row![capture, mod_boxes].spacing(14).align_y(iced::Alignment::Center),
+    ]
+    .spacing(6)
     .into()
 }
 
 fn view(app: &SettingsApp) -> Element<'_, Message> {
     let cfg = &app.cfg;
     let capturing = app.capturing;
-
-    let general = column![
-        text("Общие").size(20),
-        checkbox("Включать при старте", cfg.general.enabled_on_start)
-            .on_toggle(Message::ToggleEnabled),
-        row![
-            text("Язык UI: "),
-            iced::widget::text_input("ru", &cfg.general.language)
-                .on_input(Message::Language)
-                .width(Length::Fixed(80.0))
-        ]
-        .spacing(8),
-    ]
-    .spacing(8);
 
     let cancel_btn = if capturing.is_some() {
         row![
@@ -646,122 +643,133 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
         row![].spacing(0)
     };
 
-    let hotkeys = column![
-        text("Что делает SwitchFix").size(20),
-        text(
-            "Исправляет текст, набранный не той раскладкой: ghbdtn → привет. \
-             Нажмите на комбинацию и задайте клавиши. \
-             Галочки модификаторов — свои для каждого сочетания."
-        )
-        .size(13),
-        iced::widget::Space::with_height(8.0),
-        text("Горячие клавиши").size(16),
-        text("Нажмите на поле комбинации, затем — желаемые клавиши.").size(12),
-        hotkey_row(
-            "Исправить выделенный текст",
-            "Выделите текст мышкой и нажмите сочетание — \
-             выделение заменится на исправленное, а раскладка переключится. \
-             Пример: выделить «ghbdtn» → станет «привет». \
-             В терминале (konsole, kitty, …) SwitchFix сам очищает строку \
-             и вставляет через Ctrl+Shift+V.",
-            HotkeyField::Selection.get(cfg),
-            HotkeyField::Selection,
-            capturing == Some(HotkeyField::Selection),
-            app.mods[HotkeyField::Selection.index()],
-        ),
-        hotkey_row(
-            "Пауза / продолжить",
-            "Временно выключает SwitchFix: хоткеи не срабатывают, \
-             буфер набранных символов очищается. Повторное нажатие включает обратно.",
-            HotkeyField::Toggle.get(cfg),
-            HotkeyField::Toggle,
-            capturing == Some(HotkeyField::Toggle),
-            app.mods[HotkeyField::Toggle.index()],
-        ),
-        hotkey_row(
-            "Исправить последнее слово",
-            "Без выделения: берёт последнее набранное слово \
-             и заменяет на лучший вариант (или конвертирует раскладку).",
-            HotkeyField::FixSpelling.get(cfg),
-            HotkeyField::FixSpelling,
-            capturing == Some(HotkeyField::FixSpelling),
-            app.mods[HotkeyField::FixSpelling.index()],
-        ),
-        text("Принять подсказку (пока видна полоса предложений, максимум 3)").size(14),
-        hotkey_row(
-            "Подсказка 1",
-            "Применяет первое (лучшее) предложение из списка.",
-            HotkeyField::Accept1.get(cfg),
-            HotkeyField::Accept1,
-            capturing == Some(HotkeyField::Accept1),
-            app.mods[HotkeyField::Accept1.index()],
-        ),
-        hotkey_row(
-            "Подсказка 2",
-            "Применяет второе предложение.",
-            HotkeyField::Accept2.get(cfg),
-            HotkeyField::Accept2,
-            capturing == Some(HotkeyField::Accept2),
-            app.mods[HotkeyField::Accept2.index()],
-        ),
-        hotkey_row(
-            "Подсказка 3",
-            "Применяет третье предложение.",
-            HotkeyField::Accept3.get(cfg),
-            HotkeyField::Accept3,
-            capturing == Some(HotkeyField::Accept3),
-            app.mods[HotkeyField::Accept3.index()],
-        ),
-        cancel_btn,
-        tooltip(
-            checkbox(
-                "Полностью перехватывать назначенные клавиши",
-                cfg.hotkeys.hotkey_consume
-            )
-            .on_toggle(Message::ToggleHotkeyConsume),
-            container(
-                text(
-                    "Когда включено, нажатие хоткея не доходит до других программ \
-                     (клавиша «съедается»). Обычная печать продолжает работать. \
-                     Требует группу input. После сохранения демон перезапускается сам."
-                )
-                .size(13)
-            )
-            .padding(10)
-            .width(Length::Fixed(340.0))
-            .style(container::rounded_box),
-            tooltip::Position::Bottom,
-        ),
-        text("Сохранение применяет изменения и перезапускает демон автоматически.").size(12),
-    ]
-    .spacing(10);
+    // ── Общие ──────────────────────────────────────────────────────────
+    let general = section_card(
+        "Общие",
+        column![
+            checkbox("Включать SwitchFix при старте", cfg.general.enabled_on_start)
+                .on_toggle(Message::ToggleEnabled),
+            hotkey_row(
+                "Пауза / продолжить работу",
+                "Временно отключает все действия и очищает буфер ввода. \
+                 Повторное нажатие включает обратно.",
+                HotkeyField::Toggle.get(cfg),
+                HotkeyField::Toggle,
+                capturing == Some(HotkeyField::Toggle),
+                app.mods[HotkeyField::Toggle.index()],
+            ),
+            row![
+                text("Язык интерфейса:"),
+                iced::widget::text_input("ru", &cfg.general.language)
+                    .on_input(Message::Language)
+                    .width(Length::Fixed(80.0)),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
+        ]
+        .spacing(10),
+    );
 
-    let privacy = column![
-        text("Приватность").size(20),
-        tooltip(
-            checkbox(
-                "Запоминать последние набранные символы",
-                cfg.privacy.typing_buffer
+    // ── Текст и раскладка ──────────────────────────────────────────────
+    let text_and_layout = section_card(
+        "Текст и раскладка",
+        column![
+            text(
+                "Исправляет текст, набранный не той раскладкой: ghbdtn → привет. \
+                 Нажмите на поле комбинации и задайте клавиши; \
+                 галочки модификаторов — свои для каждого сочетания."
             )
-            .on_toggle(Message::ToggleTypingBuffer),
-            container(
-                text(
-                    "Символы хранятся только в оперативной памяти \
-                     и очищаются при паузе или выходе. Отключите, \
-                     если не хотите, чтобы программа запоминала ввод."
-                )
-                .size(13)
-            )
-            .padding(10)
-            .width(Length::Fixed(340.0))
-            .style(container::rounded_box),
-            tooltip::Position::Bottom,
-        ),
-        text("SwitchFix не отправляет данные в сеть и не сохраняет введённый текст на диск.")
-            .size(12),
-    ]
-    .spacing(8);
+            .size(13),
+            hotkey_row(
+                "Сменить раскладку выделенного текста",
+                "Выделите текст мышкой и нажмите сочетание: \
+                 выделение будет переведено в другую раскладку \
+                 (ghbdtn → привет), а системная раскладка переключится. \
+                 В терминале (konsole, kitty, …) строка очищается \
+                 и результат вставляется через Ctrl+Shift+V.",
+                HotkeyField::Selection.get(cfg),
+                HotkeyField::Selection,
+                capturing == Some(HotkeyField::Selection),
+                app.mods[HotkeyField::Selection.index()],
+            ),
+            hotkey_row(
+                "Исправить последнее слово",
+                "Без выделения: берёт последнее набранное слово \
+                 и заменяет на лучший вариант — исправляет опечатку \
+                 или переключает раскладку (ghbdtn → привет).",
+                HotkeyField::FixSpelling.get(cfg),
+                HotkeyField::FixSpelling,
+                capturing == Some(HotkeyField::FixSpelling),
+                app.mods[HotkeyField::FixSpelling.index()],
+            ),
+            cancel_btn,
+        ]
+        .spacing(12),
+    );
 
+    // ── Исправление через LLM ──────────────────────────────────────────
+    let llm = section_card(
+        "Исправление через LLM",
+        column![
+            checkbox(
+                "Разрешить LLM-исправление выделенного текста",
+                cfg.spell.llm_selection
+            )
+            .on_toggle(Message::ToggleLlmSelection),
+            hotkey_row(
+                "Исправить орфографию и грамматику выделенного",
+                "Весь выделенный текст отправляется в LLM: \
+                 исправляются опечатки, орфография и грамматика. \
+                 Иконка в трее мигает жёлтым, пока модель работает, \
+                 затем выделение заменяется на результат. \
+                 Ручное действие, не авто-замена. Требуется настроенный llm_cmd.",
+                HotkeyField::LlmFixSelection.get(cfg),
+                HotkeyField::LlmFixSelection,
+                capturing == Some(HotkeyField::LlmFixSelection),
+                app.mods[HotkeyField::LlmFixSelection.index()],
+            ),
+        ]
+        .spacing(10),
+    );
+
+    // ── Подсказки ──────────────────────────────────────────────────────
+    let suggestions = section_card(
+        "Подсказки (полоса предложений)",
+        column![
+            text(
+                "Пока видна полоса предложений, можно принять вариант сочетанием \
+                 или кликом. Максимум 3 варианта."
+            )
+            .size(13),
+            hotkey_row(
+                "Принять подсказку 1 (лучший вариант)",
+                "Применяет первое — наиболее вероятное — предложение из списка.",
+                HotkeyField::Accept1.get(cfg),
+                HotkeyField::Accept1,
+                capturing == Some(HotkeyField::Accept1),
+                app.mods[HotkeyField::Accept1.index()],
+            ),
+            hotkey_row(
+                "Принять подсказку 2",
+                "Применяет второе предложение из списка.",
+                HotkeyField::Accept2.get(cfg),
+                HotkeyField::Accept2,
+                capturing == Some(HotkeyField::Accept2),
+                app.mods[HotkeyField::Accept2.index()],
+            ),
+            hotkey_row(
+                "Принять подсказку 3",
+                "Применяет третье предложение из списка.",
+                HotkeyField::Accept3.get(cfg),
+                HotkeyField::Accept3,
+                capturing == Some(HotkeyField::Accept3),
+                app.mods[HotkeyField::Accept3.index()],
+            ),
+        ]
+        .spacing(12),
+    );
+
+    // ── Правописание ───────────────────────────────────────────────────
     let spell_modes = [
         ("hint", "Подсказки"),
         ("hotkey", "Только хоткей"),
@@ -783,18 +791,84 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
         );
     }
 
-    let spell = column![
-        text("Правописание").size(20),
-        checkbox("Проверять орфографию и подсказывать слова", cfg.spell.enabled)
+    let spell = section_card(
+        "Правописание",
+        column![
+            checkbox(
+                "Проверять орфографию и подсказывать слова",
+                cfg.spell.enabled
+            )
             .on_toggle(Message::ToggleSpell),
-        text("Режим").size(13),
-        mode_row,
-        checkbox("Короткий сигнал при исправлении", cfg.spell.sound)
-            .on_toggle(Message::ToggleSpellSound),
-        text("Принять подсказку: Ctrl+1/2/3 или клик · Ctrl+F2 — исправить слово · Ctrl+0 — в словарь")
+            row![text("Режим работы:").size(13), mode_row]
+                .spacing(10)
+                .align_y(iced::Alignment::Center),
+            checkbox("Короткий сигнал при замене слова", cfg.spell.sound)
+                .on_toggle(Message::ToggleSpellSound),
+            text(
+                "Принять подсказку — назначенные сочетания или клик · \
+                 исправить слово — хоткей · добавить в словарь — Ctrl+0"
+            )
             .size(12),
-    ]
-    .spacing(8);
+        ]
+        .spacing(10),
+    );
+
+    // ── Перехват клавиш ────────────────────────────────────────────────
+    let input_grab = section_card(
+        "Перехват клавиш",
+        column![
+            tooltip(
+                checkbox(
+                    "Полностью перехватывать назначенные клавиши",
+                    cfg.hotkeys.hotkey_consume
+                )
+                .on_toggle(Message::ToggleHotkeyConsume),
+                container(
+                    text(
+                        "Когда включено, нажатие хоткея не доходит до других программ \
+                         (клавиша «съедается»). Обычная печать продолжает работать. \
+                         Требуется группа input. После сохранения демон перезапускается сам."
+                    )
+                    .size(13)
+                )
+                .padding(10)
+                .width(Length::Fixed(360.0))
+                .style(container::rounded_box),
+                tooltip::Position::Bottom,
+            ),
+            text("Сохранение применяет изменения и перезапускает демон автоматически.").size(12),
+        ]
+        .spacing(10),
+    );
+
+    // ── Приватность ────────────────────────────────────────────────────
+    let privacy = section_card(
+        "Приватность",
+        column![
+            tooltip(
+                checkbox(
+                    "Запоминать последние набранные символы",
+                    cfg.privacy.typing_buffer
+                )
+                .on_toggle(Message::ToggleTypingBuffer),
+                container(
+                    text(
+                        "Символы хранятся только в оперативной памяти \
+                         и очищаются при паузе или выходе. Отключите, \
+                         если не хотите, чтобы программа запоминала ввод."
+                    )
+                    .size(13)
+                )
+                .padding(10)
+                .width(Length::Fixed(360.0))
+                .style(container::rounded_box),
+                tooltip::Position::Bottom,
+            ),
+            text("SwitchFix не отправляет данные в сеть и не сохраняет введённый текст на диск.")
+                .size(12),
+        ]
+        .spacing(10),
+    );
 
     let buttons = column![
         row![
@@ -813,10 +887,27 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
     ]
     .spacing(8);
 
-    let content = column![general, hotkeys, privacy, spell, buttons]
-        .spacing(24)
-        .padding(24)
-        .width(Length::Fill);
+    let content = column![
+        text("SwitchFix — исправление текста, набранного не той раскладкой").size(22),
+        text(
+            "Настройте горячие клавиши: нажмите на поле комбинации, \
+             затем — желаемые клавиши. Esc — сбросить действие."
+        )
+        .size(13),
+        iced::widget::Space::with_height(4.0),
+        general,
+        text_and_layout,
+        llm,
+        suggestions,
+        spell,
+        input_grab,
+        privacy,
+        iced::widget::Space::with_height(4.0),
+        buttons,
+    ]
+    .spacing(16)
+    .padding(24)
+    .width(Length::Fill);
 
     container(scrollable(content))
         .width(Length::Fill)
@@ -862,7 +953,7 @@ pub fn run_settings(
     iced::application("SwitchFix — настройки", update, view)
         .theme(theme)
         .subscription(subscription)
-        .window_size((580.0, 820.0))
+        .window_size((640.0, 900.0))
         .run_with(move || (app, Task::none()))
 }
 

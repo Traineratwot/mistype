@@ -33,6 +33,10 @@ pub(crate) fn parse_hotkey_bindings(
         ),
         (cfg.hotkeys.toggle_enabled.clone(), HotkeyEvent::ToggleEnabled),
         (cfg.hotkeys.fix_spelling.clone(), HotkeyEvent::FixSpelling),
+        (
+            cfg.hotkeys.llm_fix_selection.clone(),
+            HotkeyEvent::LlmFixSelection,
+        ),
     ];
     let mut out = Vec::new();
     for (s, ev) in pairs {
@@ -87,8 +91,12 @@ mod tests {
         cfg.hotkeys.convert_selection = "ctrl+f1".into();
         cfg.hotkeys.toggle_enabled = "ctrl+pause".into();
         cfg.hotkeys.fix_spelling = "ctrl+f2".into();
+        cfg.hotkeys.llm_fix_selection = "alt+r".into();
         let parsed = parse_hotkey_bindings(&cfg);
-        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed.len(), 4);
+        assert!(parsed
+            .iter()
+            .any(|(b, e)| b.key == "r" && b.alt && matches!(e, HotkeyEvent::LlmFixSelection)));
     }
 
     #[test]
