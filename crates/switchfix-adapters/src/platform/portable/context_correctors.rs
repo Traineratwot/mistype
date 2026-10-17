@@ -47,11 +47,14 @@ impl ContextCorrector for LanguageToolCorrector {
         context: &str,
         lang: &str,
     ) -> Result<Vec<ContextFix>, SpellError> {
+        // `context` is the typed sentence ending with the target word.
+        // Fall back to word-only when the tail is empty.
         let text = if context.trim().is_empty() {
             word.to_string()
+        } else if context.trim_end().ends_with(word) {
+            context.trim().to_string()
         } else {
-            // Context is the recent phrase ending with the word under check.
-            format!("{context} {word}")
+            format!("{} {}", context.trim(), word)
         };
         let lt_lang = match lang {
             "ru" => "ru-RU",
@@ -322,9 +325,10 @@ fn parse_process_output(text: &str, word: &str) -> Vec<ContextFix> {
         if let Some(arr) = v.get("suggestions").and_then(|s| s.as_array()) {
             for s in arr.iter().take(5) {
                 if let Some(t) = s.as_str() {
+                    let t = extract_target_word(t, word);
                     if !t.is_empty() && t != word {
                         out.push(ContextFix {
-                            text: t.to_string(),
+                            text: t,
                             confidence: 0.9,
                             is_ok: false,
                         });
@@ -334,17 +338,62 @@ fn parse_process_output(text: &str, word: &str) -> Vec<ContextFix> {
         }
         return out;
     }
-    // Plain lines.
+    // Plain lines — still only one word per fix (never a full-sentence rewrite).
     text.lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty() && *l != word)
+        .map(|l| extract_target_word(l, word))
+        .filter(|l| !l.is_empty() && l != word)
         .take(5)
-        .map(|l| ContextFix {
-            text: l.to_string(),
+        .map(|t| ContextFix {
+            text: t,
             confidence: 0.75,
             is_ok: false,
         })
         .collect()
+}
+
+/// Pull a single replacement word out of a free-form reply.
+///
+/// LLMs often echo the whole sentence; we only replace ONE word (the
+/// target), so keep the token closest to the original — never rewrite
+/// the sentence («слова рвутся» otherwise).
+fn extract_target_word(reply: &str, target: &str) -> String {
+    let reply = reply.trim();
+    if reply.is_empty() {
+        return String::new();
+    }
+    // Single token: pass through as-is (punctuation stripping is the
+    // caller's job — some backends use markers like `helo!`).
+    if !reply.chars().any(char::is_whitespace) {
+        return reply.to_string();
+    }
+    let clean = |s: &str| {
+        s.trim()
+            .trim_matches(|c: char| {
+                matches!(c, '.' | ',' | '!' | '?' | ';' | ':' | '"' | '\'' | '«' | '»' | '(' | ')' | '[' | ']' | '{' | '}' | '\\')
+            })
+            .to_string()
+    };
+    let mut best: Option<(usize, String)> = None;
+    for tok in reply.split_whitespace() {
+        let w = clean(tok);
+        if w.is_empty() || w.eq_ignore_ascii_case(target) {
+            continue;
+        }
+        if !w.chars().all(|c| c.is_alphabetic()) {
+            continue;
+        }
+        let d = switchfix_domain::edit_distance(target, &w);
+        if d == 0 {
+            continue;
+        }
+        if best.as_ref().map(|(bd, _)| d < *bd).unwrap_or(true) {
+            best = Some((d, w));
+        }
+    }
+    if let Some((_, w)) = best {
+        return w;
+    }
+    clean(reply.split_whitespace().last().unwrap_or(reply))
 }
 
 // ---------------------------------------------------------------------------
@@ -510,6 +559,27 @@ mod tests {
         let fixes = parse_process_output("hello\nhallo\n", "helo");
         assert_eq!(fixes.len(), 2);
         assert_eq!(fixes[0].text, "hello");
+    }
+
+    #[test]
+    fn extract_target_word_from_sentence_reply() {
+        // LLM echoed a full sentence — keep only the fix, never the rewrite.
+        assert_eq!(extract_target_word("это было новое слово", "новае"), "новое");
+        assert_eq!(extract_target_word("он начала говорить", "ачала"), "начала");
+        // Single word is passed through.
+        assert_eq!(extract_target_word("привет", "приветт"), "привет");
+        // Last-word fallback when nothing is close enough.
+        assert_eq!(extract_target_word("да", "xyzzy"), "да");
+    }
+
+    #[test]
+    fn parse_process_sentence_reply_becomes_single_word() {
+        let fixes = parse_process_output(
+            r#"{"suggestions":["это было новое слово"],"is_ok":false}"#,
+            "новае",
+        );
+        assert_eq!(fixes.len(), 1);
+        assert_eq!(fixes[0].text, "новое", "sentence reply must not tear the text");
     }
 
     #[test]

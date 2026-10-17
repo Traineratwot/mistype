@@ -247,7 +247,11 @@ pub struct ContextFix {
 pub trait ContextCorrector: Send + Sync {
     /// Human-readable id for logs (`languagetool`, `llm`, …).
     fn name(&self) -> &'static str;
-    /// Suggest a fix for `word` given surrounding `context` (recent words).
+    /// Suggest a fix for `word` given surrounding `context`.
+    ///
+    /// `context` is the recent typed sentence **ending with the target
+    /// word** (e.g. `"он ачала"` for `word="ачала"`). Backends must fix
+    /// ONLY `word` — never rewrite the whole sentence.
     ///
     /// Return `Ok(vec![ContextFix { is_ok: true, .. }])` when the word is fine
     /// (veto dictionary false positives). Empty `Ok` = no opinion.

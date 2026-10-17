@@ -450,22 +450,91 @@ pub fn should_auto_apply(suggestions: &[Suggestion], word: &str, min_len: usize)
     }
     if suggestions.len() > 1 {
         let second = edit_distance(word, &suggestions[1].text);
-        // Prefer an obvious one-key typo over a tie.
-        return dist == 1 || dist < second;
+        // Ambiguous: another candidate is just as close. Auto-apply only
+        // when the top is uniquely closer, or an obvious double-letter
+        // collapse (`приветт` → `привет`). Otherwise show the bar —
+        // picking a random edit-1 neighbor tears words («ачала» → «зачала»).
+        if dist == second {
+            return is_double_letter_collapse(word, &top.text);
+        }
+        return dist < second;
     }
     true
 }
 
+/// Longest common subsequence length (chars). Higher = more of the stem kept.
+/// Used to avoid "tearing" words into shorter dictionary words
+/// (`ачала` → `начала`, not `чала`).
+fn lcs_len(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.is_empty() || b.is_empty() {
+        return 0;
+    }
+    let mut prev = vec![0usize; b.len() + 1];
+    let mut cur = vec![0usize; b.len() + 1];
+    for &ca in &a {
+        for (j, &cb) in b.iter().enumerate() {
+            cur[j + 1] = if ca == cb {
+                prev[j] + 1
+            } else {
+                cur[j].max(prev[j + 1])
+            };
+        }
+        std::mem::swap(&mut prev, &mut cur);
+        cur.fill(0);
+    }
+    prev[b.len()]
+}
+
+/// True when `cand` is `word` with one half of an adjacent doubled letter
+/// removed (`приветт` → `привет`). The most common real typo pattern.
+fn is_double_letter_collapse(word: &str, cand: &str) -> bool {
+    let w: Vec<char> = word.chars().collect();
+    let c: Vec<char> = cand.chars().collect();
+    if c.len() + 1 != w.len() {
+        return false;
+    }
+    // Find which char was deleted.
+    let mut deleted = None;
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < w.len() && j < c.len() {
+        if w[i] == c[j] {
+            i += 1;
+            j += 1;
+        } else {
+            deleted = Some(i);
+            i += 1;
+        }
+    }
+    if deleted.is_none() && i < w.len() {
+        deleted = Some(i);
+    }
+    match deleted {
+        Some(d) => (d > 0 && w[d] == w[d - 1]) || (d + 1 < w.len() && w[d] == w[d + 1]),
+        None => false,
+    }
+}
+
 /// Order candidates for the suggestion bar.
 ///
-/// Layout-convert first (SwitchFix core), then closer edits, then shorter words
-/// (usually the more common form). Stable within the same rank.
+/// Layout-convert first (SwitchFix core), then closer edits. Within the
+/// same distance: double-letter collapse first (the usual typo), then
+/// candidates that keep more of the original stem (LCS), then longer
+/// words. Shorter dictionary words look tempting at the same edit distance
+/// but often tear the stem (`чала` from `ачала`, `нова` from `новае`).
 pub fn rank(word: &str, mut candidates: Vec<Suggestion>) -> Vec<Suggestion> {
     candidates.sort_by(|x, y| {
         kind_key(x.kind)
             .cmp(&kind_key(y.kind))
             .then_with(|| edit_distance(word, &x.text).cmp(&edit_distance(word, &y.text)))
-            .then_with(|| x.text.chars().count().cmp(&y.text.chars().count()))
+            .then_with(|| {
+                is_double_letter_collapse(word, &y.text)
+                    .cmp(&is_double_letter_collapse(word, &x.text))
+            })
+            .then_with(|| lcs_len(word, &y.text).cmp(&lcs_len(word, &x.text)))
+            .then_with(|| x.text.chars().count().cmp(&y.text.chars().count()).reverse())
+            .then_with(|| via_key(&x.via).cmp(&via_key(&y.via)))
             .then_with(|| x.text.cmp(&y.text))
     });
     candidates.dedup_by(|a, b| a.text == b.text);
@@ -477,6 +546,17 @@ fn kind_key(k: SuggestionKind) -> u8 {
         SuggestionKind::LayoutConvert => 0,
         SuggestionKind::SpellFix => 1,
         SuggestionKind::Completion => 2,
+    }
+}
+
+/// Preference among same-distance SpellFix candidates. Lower = better.
+/// Dictionary suggestions (zspell, frequency-ranked) beat raw edit-1.
+fn via_key(v: &str) -> u8 {
+    match v {
+        "context" => 0,
+        "dict" => 1,
+        "edit1" => 2,
+        _ => 3,
     }
 }
 
@@ -580,6 +660,23 @@ mod tests {
     }
 
     #[test]
+    fn should_auto_apply_refuses_ambiguous_edit1_tie() {
+        // «ачала» → «зачала»/«начала»/«качала» are all edit-1. Picking one
+        // silently tears the word — show the bar instead.
+        let word = "ачала";
+        let s = |t: &str| Suggestion::new(t, SuggestionKind::SpellFix, word);
+        assert!(!should_auto_apply(
+            &[s("зачала"), s("начала"), s("качала")],
+            word,
+            4
+        ));
+        // Double-letter collapse is still obvious enough to auto-apply.
+        let word = "приветт";
+        let s = |t: &str| Suggestion::new(t, SuggestionKind::SpellFix, word);
+        assert!(should_auto_apply(&[s("привет"), s("привету")], word, 4));
+    }
+
+    #[test]
     fn rank_puts_layout_convert_first() {
         let word = "ghbdtn";
         let mut c = vec![
@@ -603,7 +700,51 @@ mod tests {
             ],
         );
         assert_eq!(c.len(), 2);
-        assert_eq!(c[0].text, "help"); // dist 1 < dist 2
+        // Both are edit-distance 1; «hello» keeps the full stem (LCS=4),
+        // «help» throws away the final vowel (LCS=3).
+        assert_eq!(c[0].text, "hello");
+    }
+
+    #[test]
+    fn rank_does_not_tear_word_into_shorter_neighbor() {
+        // «ачала» → «начала» (insert н), not «чала» (delete а).
+        let word = "ачала";
+        let c = rank(
+            word,
+            vec![
+                Suggestion::new("чала", SuggestionKind::SpellFix, word),
+                Suggestion::new("начала", SuggestionKind::SpellFix, word),
+            ],
+        );
+        assert_eq!(c[0].text, "начала", "stem-preserving insert wins: {c:?}");
+
+        // «новае» → «новая»/«новое», not the short adverb «нова».
+        let word = "новае";
+        let c = rank(
+            word,
+            vec![
+                Suggestion::new("нова", SuggestionKind::SpellFix, word),
+                Suggestion::new("новая", SuggestionKind::SpellFix, word),
+                Suggestion::new("новое", SuggestionKind::SpellFix, word),
+            ],
+        );
+        assert_ne!(c[0].text, "нова", "short deletion must not win: {c:?}");
+        assert!(c[0].text.chars().count() == 5, "keep word length: {c:?}");
+    }
+
+    #[test]
+    fn rank_prefers_double_letter_collapse() {
+        // «приветт» → «привет» (collapse тт), not «привету»/«приветы».
+        let word = "приветт";
+        let c = rank(
+            word,
+            vec![
+                Suggestion::new("привету", SuggestionKind::SpellFix, word),
+                Suggestion::new("привет", SuggestionKind::SpellFix, word),
+                Suggestion::new("приветы", SuggestionKind::SpellFix, word),
+            ],
+        );
+        assert_eq!(c[0].text, "привет", "double-collapse wins: {c:?}");
     }
 
     #[test]

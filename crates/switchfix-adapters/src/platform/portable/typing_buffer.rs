@@ -55,7 +55,7 @@ impl SharedTypingBuffer {
     /// Physical key released (value=0).
     pub fn note_key_up(&self) {
         self.keys_down
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
                 Some(n.saturating_sub(1))
             })
             .ok();

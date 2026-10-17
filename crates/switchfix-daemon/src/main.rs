@@ -353,16 +353,22 @@ fn run_spell_cli(input: &str) {
         }
     }
     for c in dict.suggest(word, lang, 8) {
-        candidates.push(Suggestion::new(c, SuggestionKind::SpellFix, word));
+        candidates.push(
+            Suggestion::new(c, SuggestionKind::SpellFix, word).with_via("dict"),
+        );
     }
-    // Obvious one-edit fixes the engine may have missed.
-    for cand in switchfix_domain::one_step_neighbors(word) {
+    // Full edit-1 neighborhood (insert/delete/replace/transpose) — same as
+    // the live SpellService. Cheap one-step neighbors miss insertions
+    // (`ачала` → `начала`).
+    for cand in switchfix_domain::edit1_neighbors(word) {
         if candidates.iter().any(|s| s.text == cand) {
             continue;
         }
         if let Some(cl) = detect_lang(&cand) {
             if dict.is_correct(&cand, cl) {
-                candidates.push(Suggestion::new(cand, SuggestionKind::SpellFix, word));
+                candidates.push(
+                    Suggestion::new(cand, SuggestionKind::SpellFix, word).with_via("edit1"),
+                );
             }
         }
     }

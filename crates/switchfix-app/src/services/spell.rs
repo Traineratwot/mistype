@@ -474,8 +474,9 @@ impl SpellService {
 
         let dict_ok = self.spell.is_correct(word, lang);
 
-        // Fast layers first (layout + edit-1). LLM is only consulted when
-        // they cannot already fix the word — keeps typing responsive.
+        // Fast layers first (layout + edit-1). LLM is consulted for every
+        // wrong word in hybrid mode: edit-1 alone tears stems into shorter
+        // dictionary words («чала», «нова», «навал»).
         let mut ctx_fixes: Vec<crate::ports::ContextFix> = Vec::new();
         if !dict_ok {
             if let Some(c) = self.layout_candidate(word) {
@@ -484,12 +485,8 @@ impl SpellService {
             if use_hybrid {
                 self.push_edit1_neighbors(word, &mut out);
             }
-            let strong_fast = out
-                .iter()
-                .any(|s| s.kind == SuggestionKind::LayoutConvert
-                    || switchfix_domain::edit_distance(word, &s.text) == 1);
-            if use_hybrid && !strong_fast {
-                // Slow layer (~100–900 ms): context veto + better fix.
+            if use_hybrid {
+                // Slow layer (~100–1200 ms): sentence-context veto + better fix.
                 ctx_fixes = self.context_fixes(word, lang, cfg).await;
             }
         } else if use_hybrid {
@@ -639,6 +636,10 @@ impl SpellService {
     }
 
     /// Ask the hybrid backend about `word`. Soft-fails to empty.
+    ///
+    /// `context` is the typed sentence (recent tail) **ending with the
+    /// target word**. Backends must fix only that word — never rewrite
+    /// the whole sentence («слова рвутся» otherwise).
     async fn context_fixes(
         &self,
         word: &str,
@@ -649,22 +650,28 @@ impl SpellService {
             return Vec::new();
         };
         let tail = self.buffer.peek_tail(cfg.spell.context_chars);
-        // Context should not end with the word itself twice.
-        let context = {
+        // Full sentence: keep the tail as typed and make sure the target
+        // word is the last token (the only one we are allowed to change).
+        let sentence = {
             let t = tail.trim_end();
-            t.strip_suffix(word)
-                .map(|s| s.trim_end().to_string())
-                .unwrap_or_else(|| t.to_string())
+            if t.is_empty() {
+                word.to_string()
+            } else if t.ends_with(word) {
+                t.to_string()
+            } else {
+                format!("{t} {word}")
+            }
         };
         let t0 = std::time::Instant::now();
-        match ctx.correct(word, &context, lang).await {
+        match ctx.correct(word, &sentence, lang).await {
             Ok(fixes) => {
                 self.stats.note_llm(true, t0.elapsed().as_millis() as u64);
                 if !fixes.is_empty() {
                     debug!(
-                        "context[{}] word={:?} fixes={:?}",
+                        "context[{}] word={:?} sentence={:?} fixes={:?}",
                         ctx.name(),
                         word,
+                        sentence,
                         fixes
                             .iter()
                             .map(|f| (f.text.as_str(), f.is_ok, f.confidence))
@@ -997,6 +1004,7 @@ mod tests {
     #[derive(Default)]
     struct FakeBuffer {
         word: StdMutex<Option<String>>,
+        tail: StdMutex<String>,
     }
 
     #[async_trait::async_trait]
@@ -1016,6 +1024,11 @@ mod tests {
         fn backspace(&self) {}
         fn peek_current_word(&self) -> Option<String> {
             self.word.lock().unwrap().clone()
+        }
+        fn peek_tail(&self, max_chars: usize) -> String {
+            let t = self.tail.lock().unwrap().clone();
+            let skip = t.chars().count().saturating_sub(max_chars);
+            t.chars().skip(skip).collect()
         }
         fn word_events(&self) -> broadcast::Receiver<WordEvent> {
             let (tx, rx) = broadcast::channel(1);
@@ -1344,7 +1357,7 @@ mod tests {
 
     struct FakeContext {
         fixes: StdMutex<Vec<crate::ports::ContextFix>>,
-        calls: StdMutex<Vec<String>>,
+        calls: StdMutex<Vec<(String, String)>>, // (word, sentence)
     }
 
     #[async_trait::async_trait]
@@ -1355,10 +1368,13 @@ mod tests {
         async fn correct(
             &self,
             word: &str,
-            _context: &str,
+            context: &str,
             _lang: &str,
         ) -> Result<Vec<crate::ports::ContextFix>, SpellError> {
-            self.calls.lock().unwrap().push(word.to_string());
+            self.calls
+                .lock()
+                .unwrap()
+                .push((word.to_string(), context.to_string()));
             Ok(self.fixes.lock().unwrap().clone())
         }
     }
@@ -1421,6 +1437,57 @@ mod tests {
         assert_eq!(action, SpellAction::None);
         assert!(!p.is_visible());
         assert_eq!(ctx.calls.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn context_gets_full_sentence_ending_with_word() {
+        // The corrector must see the typed sentence, not a stripped fragment —
+        // that is what lets the LLM fix only the last word without tearing.
+        let ctx = Arc::new(FakeContext {
+            fixes: StdMutex::new(vec![]),
+            calls: StdMutex::new(Vec::new()),
+        });
+        let injector = Arc::new(FakeInjector::default());
+        let presenter = Arc::new(FakePresenter::default());
+        let spell = Arc::new(FakeSpell::new());
+        let buffer = Arc::new(FakeBuffer::default());
+        *buffer.tail.lock().unwrap() = "он ачала".into();
+        let (_tx, rx) = watch::channel({
+            let mut c = AppConfig::default();
+            c.spell.mode = "hint".into();
+            c
+        });
+        let svc = SpellService::new(
+            spell,
+            injector,
+            presenter,
+            buffer,
+            ConversionSet::en_ru(),
+            rx,
+            true,
+        );
+        svc.set_context_corrector(ctx.clone());
+        let _ = svc
+            .on_word_event(WordEvent::Completed {
+                word: WordSpan {
+                    text: "ачала".into(),
+                    char_len: 5,
+                },
+                separator: ' ',
+            })
+            .await;
+        let calls = ctx.calls.lock().unwrap().clone();
+        assert_eq!(calls.len(), 1, "context backend must be consulted");
+        let (word, sentence) = &calls[0];
+        assert_eq!(word, "ачала");
+        assert!(
+            sentence.ends_with("ачала"),
+            "sentence must end with the target word: {sentence:?}"
+        );
+        assert!(
+            sentence.starts_with("он"),
+            "sentence must include preceding words: {sentence:?}"
+        );
     }
 
     #[tokio::test]

@@ -159,16 +159,6 @@ impl FocusMonitor for KdeFocusMonitor {
     }
 }
 
-/// Portable no-op used when the bus is down.
-pub struct NullFocusMonitor;
-
-#[async_trait]
-impl FocusMonitor for NullFocusMonitor {
-    async fn active_window(&self) -> Option<ActiveWindow> {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
