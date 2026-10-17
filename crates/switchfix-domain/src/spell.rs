@@ -358,6 +358,54 @@ pub fn edit_distance(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
+/// Classic one-key typos that are safe to auto-replace **without** context:
+/// doubled letter, adjacent transpose, missing letter.
+///
+/// Plain deletes (except double-letter) and random one-char replaces are
+/// NOT classic — they often mean the user is still typing (`новае` → `нова`).
+pub fn is_classic_typo(word: &str, fix: &str) -> bool {
+    let w: Vec<char> = word.chars().collect();
+    let f: Vec<char> = fix.chars().collect();
+    if w.len().abs_diff(f.len()) > 1 {
+        return false;
+    }
+    // 1) Doubled letter collapse: `приветт` → `привет`, `hhello` → `hello`.
+    if f.len() + 1 == w.len() {
+        for i in 1..w.len() {
+            if w[i] == w[i - 1] {
+                let mut s = String::new();
+                s.extend(&w[..i]);
+                s.extend(&w[i + 1..]);
+                if s == fix {
+                    return true;
+                }
+            }
+        }
+    }
+    // 2) Adjacent transpose: `teh` → `the`.
+    if w.len() == f.len() {
+        for i in 0..w.len().saturating_sub(1) {
+            let mut t = w.clone();
+            t.swap(i, i + 1);
+            if t == f {
+                return true;
+            }
+        }
+    }
+    // 3) Missing letter (fix is word + one insert): `helo` → `hello`.
+    if f.len() == w.len() + 1 {
+        for i in 0..f.len() {
+            let mut s = String::new();
+            s.extend(&f[..i]);
+            s.extend(&f[i + 1..]);
+            if s == word {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Auto-replace only when the fix is obvious.
 ///
 /// Exactly one strong candidate, close to the original, word long enough.

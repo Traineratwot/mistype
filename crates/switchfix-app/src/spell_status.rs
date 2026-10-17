@@ -181,6 +181,7 @@ mod tests {
     #[test]
     fn note_counts_and_history() {
         let s = SpellStatusStore::new();
+        let _ = std::fs::remove_file(spell_status_path());
         s.set_llm(true, "llm");
         s.note("replace", "приветт", "привет", "context");
         s.note("replace", "helo", "hello", "edit1");
@@ -196,16 +197,19 @@ mod tests {
         assert_eq!(snap.history.back().unwrap().action, "hint");
         assert!(snap.llm_configured);
         assert_eq!(snap.llm_name, "llm");
+        let _ = std::fs::remove_file(spell_status_path());
     }
 
     #[test]
     fn note_llm_tracks_errors() {
         let s = SpellStatusStore::new();
+        let _ = std::fs::remove_file(spell_status_path());
         s.note_llm(true, 40);
         s.note_llm(false, 90);
         let snap = s.snapshot();
         assert_eq!(snap.llm_calls, 2);
         assert_eq!(snap.llm_errors, 1);
         assert_eq!(snap.llm_ok, Some(false));
+        let _ = std::fs::remove_file(spell_status_path());
     }
 }

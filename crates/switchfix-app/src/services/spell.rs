@@ -93,6 +93,8 @@ pub struct SpellService {
     undo: Mutex<Option<UndoState>>,
     /// Live counters + transform history (UI / suggest-peek).
     stats: Arc<SpellStatusStore>,
+    /// Bumped on every typing event; long async work aborts if it changed.
+    event_seq: std::sync::atomic::AtomicU64,
 }
 
 impl SpellService {
@@ -136,6 +138,7 @@ impl SpellService {
             last_replace: Mutex::new(None),
             undo: Mutex::new(None),
             stats: SpellStatusStore::new(),
+            event_seq: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -197,11 +200,13 @@ impl SpellService {
 
         match ev {
             WordEvent::Completed { word, separator } => {
+                self.event_seq.fetch_add(1, Ordering::SeqCst);
                 debug!("word completed: {:?} sep={:?}", word.text, separator);
                 self.on_word_completed(word.text, word.char_len, separator, &cfg)
                     .await
             }
             WordEvent::Updated(frag) => {
+                self.event_seq.fetch_add(1, Ordering::SeqCst);
                 // Real typing (not our inject) re-arms auto-replace and
                 // cancels "Backspace = undo" (the user is editing manually).
                 if !frag.is_empty() {
@@ -338,6 +343,18 @@ impl SpellService {
     ) -> SpellAction {
         *self.last_word.lock().unwrap() = Some((word.clone(), char_len, separator));
 
+        // Debounce: wait until the user pauses, so a replace never lands in
+        // the middle of the next word ("слова рвутся").
+        let seq = self.event_seq.load(Ordering::SeqCst);
+        let wait = cfg.spell.debounce_ms.clamp(0, 1000);
+        if wait > 0 {
+            self.buffer.wait_keys_quiet(wait, wait.saturating_add(400)).await;
+        }
+        if self.event_seq.load(Ordering::SeqCst) != seq {
+            debug!("spell skip {:?}: user typed during debounce", word);
+            return SpellAction::None;
+        }
+
         if !should_check(&word, cfg.spell.min_word_len) {
             debug!("spell skip word {:?}: should_check=false (min_len={})", word, cfg.spell.min_word_len);
             let _ = self.dismiss_if_showing().await;
@@ -403,7 +420,9 @@ impl SpellService {
     }
 
     async fn on_fragment_updated(&self, frag: String, cfg: &AppConfig) -> SpellAction {
-        if cfg.spell.mode != "hint" && cfg.spell.mode != "auto" {
+        // Completions while typing are noisy and make words look "torn".
+        // Only `hint` mode shows them; `auto` waits for the finished word.
+        if cfg.spell.mode != "hint" {
             return SpellAction::None;
         }
         if frag.chars().count() < cfg.spell.completion_min_chars {
@@ -455,15 +474,33 @@ impl SpellService {
 
         let dict_ok = self.spell.is_correct(word, lang);
 
-        // One context query per word (LT/LLM is the expensive layer).
-        let ctx_fixes = if use_hybrid && !completions_only {
-            self.context_fixes(word, lang, cfg).await
-        } else {
-            Vec::new()
-        };
+        // Fast layers first (layout + edit-1). LLM is only consulted when
+        // they cannot already fix the word — keeps typing responsive.
+        let mut ctx_fixes: Vec<crate::ports::ContextFix> = Vec::new();
+        if !dict_ok {
+            if let Some(c) = self.layout_candidate(word) {
+                out.push(c);
+            }
+            if use_hybrid {
+                self.push_edit1_neighbors(word, &mut out);
+            }
+            let strong_fast = out
+                .iter()
+                .any(|s| s.kind == SuggestionKind::LayoutConvert
+                    || switchfix_domain::edit_distance(word, &s.text) == 1);
+            if use_hybrid && !strong_fast {
+                // Slow layer (~100–900 ms): context veto + better fix.
+                ctx_fixes = self.context_fixes(word, lang, cfg).await;
+            }
+        } else if use_hybrid {
+            // Correct per dict: still ask LLM only for a realword mistake,
+            // and only when the word looks like a typo candidate (len≥4).
+            if word.chars().count() >= 4 {
+                ctx_fixes = self.context_fixes(word, lang, cfg).await;
+            }
+        }
 
-        // Context veto: dictionary said "wrong", but the engine says it's fine
-        // (classic Russian morphology false-positive). Don't show a bar at all.
+        // Context veto: dictionary said "wrong", but the engine says it's fine.
         if !dict_ok && ctx_fixes.iter().any(|f| f.is_ok) {
             debug!(
                 "spell skip {:?}: context says word is ok (dict false positive)",
@@ -473,7 +510,7 @@ impl SpellService {
             return None;
         }
 
-        // High-confidence context fix (with layout-convert) — skip the dict pile.
+        // High-confidence context fix — prefer over the dict pile.
         if !dict_ok {
             let strong: Vec<Suggestion> = ctx_fixes
                 .iter()
@@ -494,56 +531,40 @@ impl SpellService {
             }
         }
 
-        // Correct word → no spell-fix candidates (layout-convert still worth a try
-        // only when the word is *incorrect* in its own script).
+        // Correct word → no spell-fix candidates (unless context found a
+        // realword error above — that path already returned).
         if dict_ok {
+            if !ctx_fixes.is_empty() {
+                // LLM proposed a realword fix despite dict saying OK.
+                for f in &ctx_fixes {
+                    if !f.is_ok && f.confidence >= 0.75 {
+                        out.push(
+                            Suggestion::new(f.text.clone(), SuggestionKind::SpellFix, word)
+                                .with_via("context"),
+                        );
+                    }
+                }
+                if !out.is_empty() {
+                    return Some(filter_candidates(word, out, 3));
+                }
+            }
             debug!("word {:?} is correct in '{}', no spell-fix", word, lang);
             return None;
         }
 
-        // Layout-convert candidate: `ghbdtn` → `привет` when that is a real word.
-        if let Some(c) = self.layout_candidate(word) {
-            out.push(c);
+        // Hybrid: do NOT feed zspell.suggest into auto-replace — its ranking
+        // replaces correct Russian words with wrong ones. Dictionary only
+        // validates (is_correct). Candidates come from edit-1 / context below.
+        if !use_hybrid {
+            for c in self.spell.suggest(word, lang, n) {
+                out.push(
+                    Suggestion::new(c, SuggestionKind::SpellFix, word).with_via("dict"),
+                );
+            }
         }
 
-        for c in self.spell.suggest(word, lang, n) {
-            out.push(
-                Suggestion::new(c, SuggestionKind::SpellFix, word).with_via("dict"),
-            );
-        }
-
-        if use_hybrid {
-            // Broad neighborhood: the cheap one-step set misses most typos.
-            for cand in edit1_neighbors(word)
-                .into_iter()
-                .chain(confusable_neighbors(word))
-            {
-                if out.iter().any(|s| s.text == cand) {
-                    continue;
-                }
-                if let Some(m_lang) = detect_lang(&cand) {
-                    if self.spell.is_correct(&cand, m_lang) {
-                        out.push(
-                            Suggestion::new(cand, SuggestionKind::SpellFix, word)
-                                .with_via("edit1"),
-                        );
-                    }
-                }
-            }
-            // Remaining context suggestions (weaker than the strong-fix path).
-            for f in &ctx_fixes {
-                if f.is_ok || f.confidence < 0.5 {
-                    continue;
-                }
-                if !out.iter().any(|s| s.text == f.text) {
-                    out.push(
-                        Suggestion::new(f.text.clone(), SuggestionKind::SpellFix, word)
-                            .with_via("context"),
-                    );
-                }
-            }
-        } else {
-            // Compat path: the old cheap neighbors only.
+        if !use_hybrid {
+            // Compat path: cheap one-step neighbors only.
             for cand in one_step_neighbors(word) {
                 if out.iter().any(|s| s.text == cand) {
                     continue;
@@ -559,9 +580,41 @@ impl SpellService {
             }
         }
 
+        // Remaining weaker context suggestions (bar only, not auto).
+        for f in &ctx_fixes {
+            if f.is_ok || f.confidence < 0.5 {
+                continue;
+            }
+            if !out.iter().any(|s| s.text == f.text) {
+                out.push(
+                    Suggestion::new(f.text.clone(), SuggestionKind::SpellFix, word)
+                        .with_via("context"),
+                );
+            }
+        }
+
         // Drop far-away junk that only confuses ranking / auto-replace.
         let out = filter_candidates(word, out, 3);
         Some(out)
+    }
+
+    /// Dictionary-filtered edit-1 + confusable neighbors (cheap, no LLM).
+    fn push_edit1_neighbors(&self, word: &str, out: &mut Vec<Suggestion>) {
+        for cand in edit1_neighbors(word)
+            .into_iter()
+            .chain(confusable_neighbors(word))
+        {
+            if out.iter().any(|s| s.text == cand) {
+                continue;
+            }
+            if let Some(m_lang) = detect_lang(&cand) {
+                if self.spell.is_correct(&cand, m_lang) {
+                    out.push(
+                        Suggestion::new(cand, SuggestionKind::SpellFix, word).with_via("edit1"),
+                    );
+                }
+            }
+        }
     }
 
     fn layout_candidate(&self, word: &str) -> Option<Suggestion> {

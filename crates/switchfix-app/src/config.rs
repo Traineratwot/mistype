@@ -298,6 +298,10 @@ pub struct Spell {
     /// Max recent characters sent as context to LT/LLM.
     #[serde(default = "def_context_chars")]
     pub context_chars: usize,
+    /// Wait this long after a word (Space) before spell-checking, so the
+    /// user can keep typing without the next word being torn by a replace.
+    #[serde(default = "def_debounce_ms")]
+    pub debounce_ms: u64,
 }
 
 fn def_spell_mode() -> String {
@@ -333,6 +337,9 @@ fn def_empty() -> String {
 fn def_context_chars() -> usize {
     80
 }
+fn def_debounce_ms() -> u64 {
+    180
+}
 
 impl Default for Spell {
     fn default() -> Self {
@@ -351,6 +358,7 @@ impl Default for Spell {
             lt_url: def_empty(),
             llm_cmd: def_empty(),
             context_chars: def_context_chars(),
+            debounce_ms: def_debounce_ms(),
         }
     }
 }
