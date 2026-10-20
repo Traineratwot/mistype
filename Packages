@@ -60,3 +60,69 @@ Description: Fix text typed in the wrong keyboard layout (EN↔RU)
  RAM-only and optional. Membership in group 'input' is required for global
  hotkeys and uinput injection.
 
+Package: switchfix
+Version: 1.1.0
+Architecture: amd64
+Maintainer: SwitchFix contributors <switchfix@localhost>
+Installed-Size: 17524
+Depends: libc6, libdbus-1-3
+Recommends: policykit-1
+Filename: pool/switchfix_1.1.0_amd64.deb
+Size: 5991134
+MD5sum: 398dc29b07e5ff969995cb447565ae75
+SHA1: 5a16da46a6bb66f39c983fe6e232cc49e318cabc
+SHA256: 9dc717cbac4cf10d63afc5491d0d2a7cac352f1318e6c447c83d639042bb6676
+Section: utils
+Priority: optional
+Homepage: https://github.com/switchfix/switchfix
+Description: Fix text typed in the wrong keyboard layout (EN↔RU)
+ SwitchFix is a KDE Plasma tray utility in the spirit of Punto Switcher /
+ Keyboop. It converts text typed in the wrong keyboard layout, switches the
+ system layout, and can fix a selected sentence via an external LLM API.
+ .
+ Features:
+  * Convert selection (Ctrl+Alt+R) via clipboard-marker protocol
+  * LLM-fix selection (Alt+R): send selected text to an OpenAI-compatible
+    API and replace it; one Backspace undoes the replacement
+  * Auto terminal mode (clear line + Ctrl+Shift+V) in konsole/kitty/…
+  * Toggle on/off (Ctrl+Alt+T) and tray menu
+  * System layout switch through org.kde.KeyboardLayouts
+ .
+ Privacy: no keylogging persistence. The keystroke buffer is RAM-only and
+ optional. When LLM-fix is enabled, only the selected text is sent to the
+ API endpoint you configure. Membership in group 'input' is required for
+ global hotkeys and uinput injection.
+
+Package: switchfix
+Version: 1.1.0
+Architecture: arm64
+Maintainer: SwitchFix contributors <switchfix@localhost>
+Installed-Size: 15512
+Depends: libc6, libdbus-1-3
+Recommends: policykit-1
+Filename: pool/switchfix_1.1.0_arm64.deb
+Size: 5703934
+MD5sum: 30025ae1a4620e9016761284ed21f560
+SHA1: 002836c9827cd3d25f68aaa82cd87363a56aae51
+SHA256: 62e9ebb9682323328ad7682fe3a3b7eae310174171f30da26725f49409255c69
+Section: utils
+Priority: optional
+Homepage: https://github.com/switchfix/switchfix
+Description: Fix text typed in the wrong keyboard layout (EN↔RU)
+ SwitchFix is a KDE Plasma tray utility in the spirit of Punto Switcher /
+ Keyboop. It converts text typed in the wrong keyboard layout, switches the
+ system layout, and can fix a selected sentence via an external LLM API.
+ .
+ Features:
+  * Convert selection (Ctrl+Alt+R) via clipboard-marker protocol
+  * LLM-fix selection (Alt+R): send selected text to an OpenAI-compatible
+    API and replace it; one Backspace undoes the replacement
+  * Auto terminal mode (clear line + Ctrl+Shift+V) in konsole/kitty/…
+  * Toggle on/off (Ctrl+Alt+T) and tray menu
+  * System layout switch through org.kde.KeyboardLayouts
+ .
+ Privacy: no keylogging persistence. The keystroke buffer is RAM-only and
+ optional. When LLM-fix is enabled, only the selected text is sent to the
+ API endpoint you configure. Membership in group 'input' is required for
+ global hotkeys and uinput injection.
+
