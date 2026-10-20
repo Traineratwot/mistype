@@ -6,6 +6,24 @@
 
 ---
 
+## Демо
+
+Короткое видео (34 с): **[demo/switchfix-demo.mp4](demo/switchfix-demo.mp4)** — что происходит по хоткеям:
+
+1. `Ctrl+Alt+R` — `ghbdtn vbh` → `привет мир`
+2. `Alt+R` — LLM-чистка выделенного (трей мигает жёлтым)
+3. `Backspace` — полная отмена замены
+4. Шпаргалка по хоткеям
+
+Это анимированный HTML-мокап (не живой скрин). Пересборка:
+
+```bash
+node tools/render-demo.mjs          # → demo/switchfix-demo.mp4
+# demo/switchfix-demo.html — сцены и тайминг
+```
+
+---
+
 ## Возможности
 
 | Функция | Как работает |

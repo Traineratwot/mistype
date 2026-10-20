@@ -17,3 +17,8 @@
 *.rpm
 *.AppImage
 dist/
+
+# Demo render temp (frames / samples / notes)
+demo/.frames/
+demo/.samples/
+demo/RENDER.txt
