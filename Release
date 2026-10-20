@@ -1,6 +1,13 @@
 Origin: SwitchFix
 Label: SwitchFix
-Architectures: amd64 arm64
-Description: SwitchFix apt repository
 Suite: stable
 Codename: stable
+Date: Tue, 20 Oct 2026 21:31:09 +0000
+Architectures: amd64 arm64
+Description: SwitchFix apt repository
+MD5Sum:
+ 2643959a0e45c91419a661331ddeb84d             8152 Packages
+ cc06e893efb467fd125619f49352b04d             1620 Packages.gz
+SHA256:
+ d0dbcba9103443fdbce35804a9137ea3ceb1ab9631d9eb31b8ae5337a3cf4364             8152 Packages
+ b66d6978c569215e3192abe5c8929c825122b4c8686b4c51041f7127907814d6             1620 Packages.gz
