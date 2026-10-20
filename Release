@@ -1,13 +1,13 @@
-Origin: SwitchFix
-Label: SwitchFix
+Origin: Mistype
+Label: Mistype
 Suite: stable
 Codename: stable
-Date: Tue, 20 Oct 2026 21:31:09 +0000
+Date: Tue, 20 Oct 2026 22:17:26 +0000
 Architectures: amd64 arm64
-Description: SwitchFix apt repository
+Description: Mistype apt repository
 MD5Sum:
- 2643959a0e45c91419a661331ddeb84d             8152 Packages
- cc06e893efb467fd125619f49352b04d             1620 Packages.gz
+ 3a1cd4fc230fc0f2ec5728d95948fd6a            10984 Packages
+ 6c461ccd301d4b4664a0374adf1d5f7a             1904 Packages.gz
 SHA256:
- d0dbcba9103443fdbce35804a9137ea3ceb1ab9631d9eb31b8ae5337a3cf4364             8152 Packages
- b66d6978c569215e3192abe5c8929c825122b4c8686b4c51041f7127907814d6             1620 Packages.gz
+ b781d7f3aa38dcd10db9c5383ad454010370ff53164f9c88d87b5035c3fe9a2a            10984 Packages
+ 5bc2a3d87c7d08a6f4143812fc8333f96d8b69e9a88f61c653796a26e5dcd7da             1904 Packages.gz

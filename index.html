@@ -3,69 +3,61 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SwitchFix — apt repository</title>
+  <title>Mistype — apt repository</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <main class="wrap">
     <header>
-      <h1>SwitchFix</h1>
+      <h1>Mistype</h1>
       <p class="tagline">Fix text typed in the wrong keyboard layout (EN↔RU) — Linux/KDE answer to Punto Switcher.</p>
     </header>
 
     <section class="intro">
       <h2>Install (Debian / Ubuntu / Kubuntu)</h2>
-      <pre><code>echo "deb [trusted=yes] https://Traineratwot.github.io/switchfix ./" \
-  | sudo tee /etc/apt/sources.list.d/switchfix.list
+      <pre><code>echo "deb [trusted=yes] https://Traineratwot.github.io/mistype ./" \
+  | sudo tee /etc/apt/sources.list.d/mistype.list
 sudo apt update
-sudo apt install switchfix</code></pre>
+sudo apt install mistype</code></pre>
       <p class="muted">Or download the <code>.deb</code> below and run
-        <code>sudo apt install ./switchfix_*.deb</code>.</p>
+        <code>sudo apt install ./mistype_*.deb</code>.</p>
     </section>
 
     <section>
       <h2>After install</h2>
-      <pre><code>switchfix setup      # group 'input' + udev rule (prompts for sudo only when needed)
-switchfix doctor     # diagnostics: platform, hotkeys, D-Bus, sound
-switchfix selftest   # inject ctrl+f20 via uinput, verify evdev intercept</code></pre>
+      <pre><code>mistype setup      # group 'input' + udev rule (prompts for sudo only when needed)
+mistype doctor     # diagnostics: platform, hotkeys, D-Bus, sound
+mistype selftest   # inject ctrl+f20 via uinput, verify evdev intercept</code></pre>
       <p class="muted">Enable the tray daemon when ready (not enabled automatically):</p>
-      <pre><code>systemctl --user enable --now switchfix</code></pre>
+      <pre><code>systemctl --user enable --now mistype</code></pre>
       <p class="muted">Global hotkeys need group <code>input</code>. Run
-        <code>switchfix setup</code> or <code>sudo usermod -aG input $USER</code>
+        <code>mistype setup</code> or <code>sudo usermod -aG input $USER</code>
         and re-login. Hotkeys are configured in
-        <code>~/.config/switchfix/config.toml</code> — restart the daemon after changes.</p>
+        <code>~/.config/mistype/config.toml</code> — restart the daemon after changes.</p>
     </section>
 
     <section>
       <h2>Packages (apt)</h2>
       <ul class="packages">
-<li><a class="name" href="pool/switchfix_0.1.0_amd64.deb">switchfix_0.1.0_amd64.deb</a><span class="meta">deb amd64 · 4.9M</span></li>
-<li><a class="name" href="pool/switchfix_0.1.0_arm64.deb">switchfix_0.1.0_arm64.deb</a><span class="meta">deb arm64 · 4.7M</span></li>
-<li><a class="name" href="pool/switchfix_1.1.0_amd64.deb">switchfix_1.1.0_amd64.deb</a><span class="meta">deb amd64 · 5.8M</span></li>
-<li><a class="name" href="pool/switchfix_1.1.0_arm64.deb">switchfix_1.1.0_arm64.deb</a><span class="meta">deb arm64 · 5.5M</span></li>
-<li><a class="name" href="pool/switchfix_1.2.0_amd64.deb">switchfix_1.2.0_amd64.deb</a><span class="meta">deb amd64 · 5.8M</span></li>
-<li><a class="name" href="pool/switchfix_1.2.0_arm64.deb">switchfix_1.2.0_arm64.deb</a><span class="meta">deb arm64 · 5.5M</span></li>
-<li><a class="name" href="downloads/switchfix_0.1.0_linux_amd64.tar.gz">switchfix_0.1.0_linux_amd64.tar.gz</a><span class="meta">linux x64 · 6.4M</span></li>
-<li><a class="name" href="downloads/switchfix_0.1.0_linux_arm64.tar.gz">switchfix_0.1.0_linux_arm64.tar.gz</a><span class="meta">linux arm64 · 6.0M</span></li>
-<li><a class="name" href="downloads/switchfix_1.1.0_linux_amd64.tar.gz">switchfix_1.1.0_linux_amd64.tar.gz</a><span class="meta">linux x64 · 7.4M</span></li>
-<li><a class="name" href="downloads/switchfix_1.1.0_linux_arm64.tar.gz">switchfix_1.1.0_linux_arm64.tar.gz</a><span class="meta">linux arm64 · 7.0M</span></li>
-<li><a class="name" href="downloads/switchfix_1.2.0_linux_amd64.tar.gz">switchfix_1.2.0_linux_amd64.tar.gz</a><span class="meta">linux x64 · 7.4M</span></li>
-<li><a class="name" href="downloads/switchfix_1.2.0_linux_arm64.tar.gz">switchfix_1.2.0_linux_arm64.tar.gz</a><span class="meta">linux arm64 · 7.0M</span></li>
+<li><a class="name" href="pool/mistype_2.0.0_amd64.deb">mistype_2.0.0_amd64.deb</a><span class="meta">deb amd64 · 5.8M</span></li>
+<li><a class="name" href="pool/mistype_2.0.0_arm64.deb">mistype_2.0.0_arm64.deb</a><span class="meta">deb arm64 · 5.5M</span></li>
+<li><a class="name" href="downloads/mistype_2.0.0_linux_amd64.tar.gz">mistype_2.0.0_linux_amd64.tar.gz</a><span class="meta">linux x64 · 7.4M</span></li>
+<li><a class="name" href="downloads/mistype_2.0.0_linux_arm64.tar.gz">mistype_2.0.0_linux_arm64.tar.gz</a><span class="meta">linux arm64 · 7.0M</span></li>
 </ul>
 
     </section>
 
     <section>
       <p class="muted">Source, issues and checksums are on
-        <a href="https://github.com/Traineratwot/switchfix">GitHub</a> ·
+        <a href="https://github.com/Traineratwot/mistype">GitHub</a> ·
         downloads and release notes on
-        <a href="https://github.com/Traineratwot/switchfix/releases">Releases</a>.</p>
+        <a href="https://github.com/Traineratwot/mistype/releases">Releases</a>.</p>
       <p class="muted">Privacy: no network, no keylogging persistence. The keystroke buffer is
-        RAM-only and optional. See <code>/usr/share/doc/switchfix/PRIVACY.md</code>.</p>
+        RAM-only and optional. See <code>/usr/share/doc/mistype/PRIVACY.md</code>.</p>
     </section>
 
     <footer>
-      <a href="https://github.com/Traineratwot/switchfix">github.com/Traineratwot/switchfix</a>
+      <a href="https://github.com/Traineratwot/mistype">github.com/Traineratwot/mistype</a>
     </footer>
   </main>
 </body>
