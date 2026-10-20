@@ -5,9 +5,10 @@ pub mod platform;
 pub use platform::portable::config_store::{ensure_config, TomlConfigStore};
 pub use platform::portable::{
     append_llm_history, clear_daemon_heartbeat, daemon_heartbeat_path, llm_history_path,
-    load_conversion_set, read_daemon_heartbeat, read_llm_history, seed_default_maps,
-    user_maps_dir, write_daemon_heartbeat, DaemonHeartbeat, LayoutCharMapper, LlmHistoryEntry,
-    OpenAiCorrector, SharedTypingBuffer,
+    llm_status_is_fresh, load_conversion_set, read_daemon_heartbeat, read_llm_history,
+    read_llm_status, seed_default_maps, touch_llm_status, user_maps_dir, write_daemon_heartbeat,
+    write_daemon_heartbeat_ex, write_llm_status, DaemonHeartbeat, LayoutCharMapper, LlmHistoryEntry,
+    LlmStatus, OpenAiCorrector, SharedTypingBuffer, FRESH_MS,
 };
 pub use platform::{
     create_platform, create_platform_from, detect, detect_from, detect_os, parse_desktop,

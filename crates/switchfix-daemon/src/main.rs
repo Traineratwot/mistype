@@ -172,9 +172,8 @@ async fn main() -> anyhow::Result<()> {
             println!("\nself-test OK — hotkey interception works");
         }
         Command::LlmHistory => {
-            let list = switchfix_adapters::read_llm_history();
-            // Compact JSON for the Plasma widget.
-            println!("{}", serde_json::to_string(&list).unwrap_or_else(|_| "[]".into()));
+            let st = switchfix_adapters::read_llm_status();
+            println!("{}", serde_json::to_string(&st).unwrap_or_else(|_| "{}".into()));
         }
         Command::LlmCopy { index, field } => {
             let list = switchfix_adapters::read_llm_history();
@@ -306,7 +305,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     // Settings "Сохранить" signals a full restart so hotkeys rebind (re-exec).
     let restart_path = std::env::temp_dir().join("switchfix.restart");
     let last_restart = std::fs::read_to_string(&restart_path).unwrap_or_default();
-    switchfix_adapters::write_daemon_heartbeat(service.is_enabled());
+    switchfix_adapters::write_llm_status(service.is_enabled(), false);
 
     let mut restart_requested = false;
     loop {
@@ -330,12 +329,14 @@ async fn run_daemon() -> anyhow::Result<()> {
                                 info!("correction outcome: {out:?}");
                             }
                             HotkeyEvent::LlmFixSelection => {
-                                // Yellow blink while the LLM thinks, then replace.
+                                // Yellow blink + busy flag while the LLM thinks.
                                 tray_handle.set_busy(true);
+                                switchfix_adapters::write_llm_status(service.is_enabled(), true);
                                 let out = service
                                     .handle(CorrectionRequest::LlmFixSelection)
                                     .await;
                                 tray_handle.set_busy(false);
+                                switchfix_adapters::write_llm_status(service.is_enabled(), false);
                                 info!("llm-fix outcome: {out:?}");
                                 record_llm_history(&out);
                                 if out.is_success() {
@@ -344,7 +345,7 @@ async fn run_daemon() -> anyhow::Result<()> {
                             }
                             HotkeyEvent::ToggleEnabled => {
                                 service.toggle_enabled().await;
-                                switchfix_adapters::write_daemon_heartbeat(service.is_enabled());
+                                switchfix_adapters::touch_llm_status(service.is_enabled());
                             }
                         }
                     }
@@ -355,12 +356,12 @@ async fn run_daemon() -> anyhow::Result<()> {
                 }
             }
             _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
-                switchfix_adapters::write_daemon_heartbeat(service.is_enabled());
+                switchfix_adapters::touch_llm_status(service.is_enabled());
                 if let Ok(v) = std::fs::read_to_string(&toggle_path) {
                     if v != last_toggle {
                         last_toggle = v;
                         service.toggle_enabled().await;
-                        switchfix_adapters::write_daemon_heartbeat(service.is_enabled());
+                        switchfix_adapters::touch_llm_status(service.is_enabled());
                     }
                 }
                 // Config / maps reload (settings button or `switchfix reload`).

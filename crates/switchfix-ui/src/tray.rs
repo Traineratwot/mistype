@@ -147,29 +147,52 @@ impl Tray for SwitchFixTray {
         } else if self.model.is_flashing() {
             "notification-message-im".into()
         } else if self.model.is_enabled() {
-            "input-keyboard".into()
+            // Program logo (assets/icons/switchfix.svg), not the generic keyboard.
+            "switchfix".into()
         } else {
             "media-playback-pause".into()
         }
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
-        let (r, g, b) = if self.model.is_busy() {
-            busy_color()
+        // Fallback when the theme has no `switchfix` icon: compact EN↔RU logo.
+        let (bg, left, right) = if self.model.is_busy() {
+            (busy_color(), (0x88, 0x66, 0x00), (0x88, 0x66, 0x00))
         } else if self.model.is_flashing() {
-            flash_color()
+            (flash_color(), (0x99, 0x44, 0x00), (0x99, 0x44, 0x00))
         } else if self.model.is_enabled() {
-            (0x2e, 0xcc, 0x71)
+            ((0x2b, 0x2e, 0x3b), (0x5b, 0x9c, 0xff), (0xff, 0x7a, 0x59))
         } else {
-            (0x88, 0x88, 0x88)
+            ((0x44, 0x44, 0x44), (0x77, 0x77, 0x77), (0x77, 0x77, 0x77))
         };
-        let mut data = Vec::with_capacity(16 * 16 * 4);
-        for _ in 0..(16 * 16) {
-            data.extend_from_slice(&[r, g, b, 0xff]);
+        let size = 16;
+        let mut data = vec![0u8; size * size * 4];
+        for y in 0..size {
+            for x in 0..size {
+                let i = (y * size + x) * 4;
+                // Dark rounded-ish plate.
+                let mut px = bg;
+                // Left key block (EN).
+                if (2..=6).contains(&x) && (4..=10).contains(&y) {
+                    px = left;
+                }
+                // Right key block (RU).
+                if (9..=13).contains(&x) && (4..=10).contains(&y) {
+                    px = right;
+                }
+                // Swap bar in the middle.
+                if (6..=9).contains(&x) && y == 7 {
+                    px = (0xe8, 0xea, 0xf0);
+                }
+                data[i] = px.0;
+                data[i + 1] = px.1;
+                data[i + 2] = px.2;
+                data[i + 3] = 0xff;
+            }
         }
         vec![Icon {
-            width: 16,
-            height: 16,
+            width: size as i32,
+            height: size as i32,
             data,
         }]
     }

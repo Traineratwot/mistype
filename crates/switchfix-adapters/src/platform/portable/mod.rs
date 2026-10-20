@@ -15,10 +15,13 @@ pub use clipboard::ArboardClipboard;
 pub use config_store::{ensure_config, TomlConfigStore};
 pub use heartbeat::{
     clear_daemon_heartbeat, daemon_heartbeat_path, read_daemon_heartbeat, write_daemon_heartbeat,
-    DaemonHeartbeat,
+    write_daemon_heartbeat_ex, DaemonHeartbeat,
 };
 pub use layout_chars::LayoutCharMapper;
-pub use llm_history::{append_llm_history, llm_history_path, read_llm_history, LlmHistoryEntry};
+pub use llm_history::{
+    append_llm_history, llm_history_path, llm_status_is_fresh, read_llm_history, read_llm_status,
+    touch_llm_status, write_llm_status, LlmHistoryEntry, LlmStatus, FRESH_MS,
+};
 pub use log_notifier::LogNotifier;
 pub use maps::{load_conversion_set, seed_default_maps, user_maps_dir};
 pub use manual_hotkeys::ManualHotkeySource;

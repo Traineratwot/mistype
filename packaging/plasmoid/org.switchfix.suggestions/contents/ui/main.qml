@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Controls as QQC2
 import org.kde.plasma.plasmoid
 import org.kde.plasma.components as PlasmaComponents
 import org.kde.kirigami as Kirigami
@@ -7,7 +8,8 @@ import org.kde.plasma.plasma5support as P5Support
 
 // SwitchFix LLM — panel widget: request history for «LLM-fix selection».
 //
-// Polls `switchfix llm-history` (JSON array, newest first).
+// Polls `/tmp/switchfix.llm-history.json` (status + history) via `cat`
+// so PATH / binary version cannot hide a running daemon.
 // compactRepresentation = status LED + busy spinner.
 // fullRepresentation    = popup: status + history with copy buttons.
 
@@ -15,6 +17,9 @@ PlasmoidItem {
     id: root
 
     property var history: []
+    property bool daemonRunning: false
+    property bool enabled: false
+    property bool llmBusy: false
     readonly property int count: history.length
 
     function shortText(s, n) {
@@ -24,10 +29,17 @@ PlasmoidItem {
         return s.slice(0, Math.max(1, n - 1)) + "…";
     }
 
-    toolTipMainText: i18n("SwitchFix — история LLM-запросов")
-    toolTipSubText: count > 0
-        ? i18n("%1 запрос(ов). Клик — открыть.", count)
-        : i18n("Пока пусто. Выделите текст и нажмите Alt+R.")
+    function nowMs() {
+        return Date.now();
+    }
+
+    toolTipMainText: !daemonRunning
+        ? i18n("SwitchFix — демон не запущен")
+        : (llmBusy ? i18n("SwitchFix — LLM думает…") : i18n("SwitchFix — история LLM-запросов"))
+    toolTipSubText: !daemonRunning
+        ? i18n("Запустите: switchfix daemon")
+        : (llmBusy ? i18n("Запрос к API…")
+                   : i18n("%1 запрос(ов). Клик — открыть.", count))
 
     preferredRepresentation: compactRepresentation
 
@@ -40,47 +52,77 @@ PlasmoidItem {
         onNewData: function (source, data) {
             var out = data["stdout"] !== undefined ? String(data["stdout"]).trim() : "";
             disconnectSource(source);
-            if (source.indexOf("llm-history") === 0) {
+            if (source.indexOf("llm-history.json") >= 0 || source.indexOf("llm-history") === 0) {
                 try {
-                    root.history = (out && out !== "[]") ? JSON.parse(out) : [];
+                    var obj = out ? JSON.parse(out) : {};
+                    if (Array.isArray(obj)) {
+                        root.history = obj;
+                        root.daemonRunning = true;
+                        root.llmBusy = false;
+                        root.enabled = true;
+                    } else {
+                        root.history = obj.history || [];
+                        root.enabled = !!obj.enabled;
+                        root.llmBusy = !!obj.busy;
+                        // Alive if a daemon wrote the file in the last 15 s.
+                        var updated = Number(obj.updated || 0);
+                        root.daemonRunning = updated > 0 && (root.nowMs() - updated) < 15000;
+                    }
                 } catch (e) {
                     root.history = [];
+                    root.daemonRunning = false;
+                    root.llmBusy = false;
                 }
             }
         }
     }
 
     Timer {
-        interval: 1500
+        interval: 800
         repeat: true
         running: true
         triggeredOnStart: true
         onTriggered: {
             if (runner.connectedSources.length === 0) {
-                runner.connectSource("switchfix llm-history");
+                // Direct file read — works even if `switchfix` is not on the
+                // plasmashell PATH or is an older install.
+                runner.connectSource("sh -c 'cat /tmp/switchfix.llm-history.json 2>/dev/null || echo {}'");
             }
         }
     }
 
     function copy(index, field) {
-        runner.connectSource("switchfix llm-copy --index " + index + " --field " + field);
+        // Prefer the CLI (uses the same clipboard path as the daemon).
+        runner.connectSource("sh -c 'switchfix llm-copy --index " + index + " --field " + field + " 2>/dev/null || wl-copy < /tmp/switchfix.llm-history.json'");
     }
 
-    // --- panel content (compact): LED ---------------------------------
+    // --- panel content (compact): LED + spinner -----------------------
     compactRepresentation: Item {
         id: compactRoot
         Layout.preferredHeight: Kirigami.Units.iconSizes.medium
         Layout.minimumWidth: Kirigami.Units.iconSizes.medium
         Layout.preferredWidth: Kirigami.Units.iconSizes.medium
 
+        // Green = daemon running, blue = LLM busy, red = daemon down, gray = paused.
         Rectangle {
             anchors.centerIn: parent
             width: 12
             height: 12
             radius: 6
-            color: root.count > 0 ? "#2ecc71" : "#888888"
+            color: !root.daemonRunning ? "#e74c3c"
+                 : (root.llmBusy ? "#3498db"
+                 : (root.enabled ? "#2ecc71" : "#f0c000"))
             border.width: 1
             border.color: Qt.rgba(0, 0, 0, 0.35)
+            visible: !root.llmBusy
+        }
+
+        PlasmaComponents.BusyIndicator {
+            anchors.centerIn: parent
+            visible: root.llmBusy
+            running: root.llmBusy
+            width: 16
+            height: 16
         }
 
         MouseArea {
@@ -97,10 +139,29 @@ PlasmoidItem {
 
         RowLayout {
             Layout.fillWidth: true
+            spacing: Kirigami.Units.smallSpacing
+
+            Rectangle {
+                width: 10
+                height: 10
+                radius: 5
+                color: !root.daemonRunning ? "#e74c3c"
+                     : (root.llmBusy ? "#3498db"
+                     : (root.enabled ? "#2ecc71" : "#f0c000"))
+            }
             PlasmaComponents.Label {
                 Layout.fillWidth: true
-                text: i18n("История LLM-запросов")
                 font.bold: true
+                text: !root.daemonRunning
+                    ? i18n("Демон не запущен")
+                    : (root.llmBusy ? i18n("LLM: запрос…")
+                       : (root.enabled ? i18n("SwitchFix работает") : i18n("SwitchFix на паузе")))
+            }
+            PlasmaComponents.BusyIndicator {
+                visible: root.llmBusy
+                running: root.llmBusy
+                width: Kirigami.Units.iconSizes.small
+                height: Kirigami.Units.iconSizes.small
             }
             PlasmaComponents.Label {
                 opacity: 0.6
@@ -117,7 +178,7 @@ PlasmoidItem {
         }
 
         // Newest first; short texts so rows fit the popup width.
-        ScrollView {
+        QQC2.ScrollView {
             Layout.fillWidth: true
             Layout.maximumHeight: 280
             visible: root.count > 0

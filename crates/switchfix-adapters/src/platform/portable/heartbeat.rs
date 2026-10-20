@@ -12,13 +12,22 @@ pub fn daemon_heartbeat_path() -> PathBuf {
 pub struct DaemonHeartbeat {
     pub pid: u32,
     pub enabled: bool,
+    /// True while an LLM-fix request is in flight (for the Plasma widget).
+    #[serde(default)]
+    pub busy: bool,
 }
 
 /// Record that the daemon is alive (call from the main loop / on toggle).
 pub fn write_daemon_heartbeat(enabled: bool) {
+    write_daemon_heartbeat_ex(enabled, false);
+}
+
+/// Heartbeat with an explicit LLM-busy flag.
+pub fn write_daemon_heartbeat_ex(enabled: bool, busy: bool) {
     let hb = DaemonHeartbeat {
         pid: std::process::id(),
         enabled,
+        busy,
     };
     if let Ok(json) = serde_json::to_string(&hb) {
         let _ = std::fs::write(daemon_heartbeat_path(), json);
@@ -40,3 +49,4 @@ pub fn read_daemon_heartbeat() -> Option<DaemonHeartbeat> {
         None
     }
 }
+

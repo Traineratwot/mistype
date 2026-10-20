@@ -690,6 +690,17 @@ fn combo_from_mods(mods: &HotkeyMods, base: &str) -> String {
     parts.join("+")
 }
 
+/// Short label for a model chip: last path segment, capped so chips stay wide.
+fn chip_label(id: &str) -> String {
+    let short = id.rsplit('/').next().unwrap_or(id);
+    if short.chars().count() <= 32 {
+        short.to_string()
+    } else {
+        let cut: String = short.chars().take(31).collect();
+        format!("{cut}…")
+    }
+}
+
 /// Semantic section card: rounded box with a title and body content.
 fn section_card<'a>(
     title: &'a str,
@@ -827,35 +838,26 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
     let model_hints: Element<'_, Message> = if app.models.is_empty() {
         row![].spacing(0).into()
     } else {
-        // Wrap chips into rows of 4 so the card stays readable.
-        let mut rows = column![].spacing(6);
-        let mut current = row![].spacing(6);
-        let mut in_row = 0usize;
+        // Row::wrap() = CSS float: chips flow and drop to the next line
+        // instead of being squeezed into vertical columns.
+        let mut chips = row![].spacing(6);
         for id in &app.models {
-            let label = id.clone();
+            let full = id.clone();
             let selected = app.cfg.llm.model == *id;
-            let btn = button(text(label.clone()).size(12))
-                .on_press(Message::PickModel(label))
+            let label = chip_label(id);
+            let btn = button(text(label).size(12))
+                .on_press(Message::PickModel(full))
                 .padding([4, 8])
                 .style(if selected {
                     iced::widget::button::primary
                 } else {
                     iced::widget::button::secondary
                 });
-            current = current.push(btn);
-            in_row += 1;
-            if in_row == 4 {
-                rows = rows.push(current);
-                current = row![].spacing(6);
-                in_row = 0;
-            }
-        }
-        if in_row > 0 {
-            rows = rows.push(current);
+            chips = chips.push(btn);
         }
         column![
             text("Доступные модели (нажмите, чтобы выбрать):").size(12),
-            rows,
+            chips.wrap(),
         ]
         .spacing(6)
         .into()
@@ -956,6 +958,8 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
         ]
         .spacing(10),
     );
+    // Note: do NOT wrap this in mouse_area().interaction(Working) — on Wayland
+    // it makes the cursor flicker/vanish. Busy is shown via the spinner row.
 
     // ── Перехват клавиш ────────────────────────────────────────────────
     let input_grab = section_card(
