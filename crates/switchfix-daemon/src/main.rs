@@ -48,6 +48,18 @@ enum Command {
     Beep,
     /// Inject a synthetic hotkey (ctrl+f20) and verify evdev interception works.
     Selftest,
+    /// Print LLM-fix history as JSON (for the Plasma widget). Newest first.
+    LlmHistory,
+    /// Copy a field from one history entry to the clipboard (for the widget).
+    /// Index is 0 = newest. Field: `from` (original) or `to` (result).
+    LlmCopy {
+        /// Entry index, 0 = newest.
+        #[arg(long, default_value_t = 0)]
+        index: usize,
+        /// Which text: `from` or `to`.
+        #[arg(long, default_value = "to")]
+        field: String,
+    },
 }
 
 #[tokio::main]
@@ -108,7 +120,6 @@ async fn main() -> anyhow::Result<()> {
             let cfg = switchfix_adapters::ensure_config(&store);
             let _ = switchfix_adapters::seed_default_maps();
             info!("opening settings (config at {:?})", store.path());
-            let _ = cfg;
             let config_dir = store
                 .path()
                 .parent()
@@ -118,7 +129,10 @@ async fn main() -> anyhow::Result<()> {
                         .unwrap_or_else(|| std::path::PathBuf::from("."))
                         .join("switchfix")
                 });
-            switchfix_ui::run_settings(Box::new(store), config_dir)?;
+            let probe = std::sync::Arc::new(
+                switchfix_adapters::platform::portable::OpenAiCorrector::new(&cfg.llm),
+            );
+            switchfix_ui::run_settings(Box::new(store), config_dir, Some(probe))?;
         }
         Command::Reload => {
             let path = std::env::temp_dir().join("switchfix.reload");
@@ -157,12 +171,73 @@ async fn main() -> anyhow::Result<()> {
             }
             println!("\nself-test OK — hotkey interception works");
         }
+        Command::LlmHistory => {
+            let list = switchfix_adapters::read_llm_history();
+            // Compact JSON for the Plasma widget.
+            println!("{}", serde_json::to_string(&list).unwrap_or_else(|_| "[]".into()));
+        }
+        Command::LlmCopy { index, field } => {
+            let list = switchfix_adapters::read_llm_history();
+            let Some(entry) = list.get(index) else {
+                eprintln!("no history entry at index {index}");
+                std::process::exit(1);
+            };
+            let text = match field.as_str() {
+                "from" => entry.from.as_str(),
+                _ => entry.to.as_str(),
+            };
+            // Use the same clipboard path as the daemon (arboard).
+            let mut clip = arboard::Clipboard::new().map_err(|e| anyhow::anyhow!("clipboard: {e}"))?;
+            clip.set_text(text.to_string())
+                .map_err(|e| anyhow::anyhow!("clipboard set: {e}"))?;
+            println!("copied ({} chars)", text.chars().count());
+        }
         Command::Daemon => {
             run_daemon().await?;
         }
     }
 
     Ok(())
+}
+
+/// Persist an LLM-fix outcome for the Plasma widget history panel.
+fn record_llm_history(out: &switchfix_domain::CorrectionOutcome) {
+    use switchfix_domain::CorrectionOutcome;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    match out {
+        CorrectionOutcome::Converted {
+            original,
+            converted,
+            ..
+        } => switchfix_adapters::append_llm_history(switchfix_adapters::LlmHistoryEntry {
+            ts,
+            from: original.clone(),
+            to: converted.clone(),
+            ok: true,
+        }),
+        CorrectionOutcome::Partial {
+            original,
+            converted,
+            ..
+        } => switchfix_adapters::append_llm_history(switchfix_adapters::LlmHistoryEntry {
+            ts,
+            from: original.clone(),
+            to: converted.clone(),
+            ok: true,
+        }),
+        CorrectionOutcome::Failed(e) => switchfix_adapters::append_llm_history(
+            switchfix_adapters::LlmHistoryEntry {
+                ts,
+                from: String::new(),
+                to: format!("error: {e}"),
+                ok: false,
+            },
+        ),
+        CorrectionOutcome::NoInputFound | CorrectionOutcome::Disabled => {}
+    }
 }
 
 async fn run_daemon() -> anyhow::Result<()> {
@@ -262,6 +337,7 @@ async fn run_daemon() -> anyhow::Result<()> {
                                     .await;
                                 tray_handle.set_busy(false);
                                 info!("llm-fix outcome: {out:?}");
+                                record_llm_history(&out);
                                 if out.is_success() {
                                     switchfix_ui::play_fix_sound();
                                 }

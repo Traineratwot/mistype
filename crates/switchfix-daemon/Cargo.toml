@@ -22,6 +22,7 @@ tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
 dirs = { workspace = true }
 serde_json = { workspace = true }
+arboard = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { workspace = true }

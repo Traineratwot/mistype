@@ -1,6 +1,6 @@
 [Unit]
-Description=SwitchFix — fix text typed in the wrong keyboard layout
-Documentation=file:///usr/share/doc/switchfix/MANUAL.md
+Description=SwitchFix — layout convert + LLM-fix selection (EN↔RU)
+Documentation=file:///usr/share/doc/switchfix/PRIVACY.md
 PartOf=graphical-session.target
 After=graphical-session.target
 
@@ -10,11 +10,16 @@ ExecStart=/usr/bin/switchfix daemon
 Restart=on-failure
 RestartSec=2
 
-# Sandboxing (user service — keep it tight but allow /dev/input + /dev/uinput + D-Bus).
+# Sandboxing (user service — tight, but keep the paths SwitchFix actually uses).
+# Features: selection layout-convert, LLM-fix selection (optional HTTP API),
+# tray, hotkeys. No dictionaries, no local LLM engine, no auto-replace.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
-PrivateTmp=yes
+# PrivateTmp would isolate /tmp from `switchfix` CLI and the Plasma widget.
+# All daemon IPC lives in /tmp: llm-history.json, enabled, reload, restart,
+# capture-pause, daemon heartbeat. Keep a shared /tmp.
+PrivateTmp=no
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
@@ -22,15 +27,17 @@ RestrictSUIDSGID=yes
 RestrictRealtime=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
-# AF_INET/6 needed only for the optional LLM API (llm.base_url).
+# AF_UNIX/NETLINK: D-Bus (org.kde.KeyboardLayouts), evdev/uinput netlink.
+# AF_INET/6: only for optional LLM API when llm.base_url is set.
 RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
 # evdev/uinput need /dev/input and /dev/uinput.
 DeviceAllow=/dev/input/event* rw
 DeviceAllow=/dev/uinput rw
 DevicePolicy=closed
-# Config lives in ~/.config/switchfix (read-only is enough for daemon).
+# Config lives in ~/.config/switchfix (read-only is enough for the daemon;
+# the Settings GUI writes config as a separate process).
 ReadOnlyPaths=%h/.config/switchfix
-# Logs must not contain typed text (see PRIVACY.md).
+# Logs must not contain typed text or the API token (see PRIVACY.md).
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=switchfix

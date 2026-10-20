@@ -3762,7 +3762,7 @@ dependencies = [
 
 [[package]]
 name = "switchfix-adapters"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arboard",
  "async-trait",
@@ -3785,7 +3785,7 @@ dependencies = [
 
 [[package]]
 name = "switchfix-app"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "serde",
@@ -3798,9 +3798,10 @@ dependencies = [
 
 [[package]]
 name = "switchfix-daemon"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
+ "arboard",
  "async-trait",
  "clap 4.6.7",
  "dirs 6.0.0",
@@ -3817,7 +3818,7 @@ dependencies = [
 
 [[package]]
 name = "switchfix-domain"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3826,7 +3827,7 @@ dependencies = [
 
 [[package]]
 name = "switchfix-tests"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "switchfix-app",
@@ -3836,7 +3837,7 @@ dependencies = [
 
 [[package]]
 name = "switchfix-ui"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "iced",

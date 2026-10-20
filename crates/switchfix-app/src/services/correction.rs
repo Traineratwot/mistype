@@ -285,6 +285,10 @@ impl CorrectionService {
         }
 
         let _ = self.state_tx.send(CorrectionState::Capturing);
+        let _ = self
+            .notifier
+            .notify("LLM: отправляю запрос…", NotifyLevel::Info)
+            .await;
         let corrected = match tc.correct_text(&text).await {
             Ok(t) => t,
             Err(e) => {

@@ -38,6 +38,7 @@ Other IPC (always local):
 | Keystroke buffer (last N chars) | RAM | Until convert, pause, exit, or overflow |
 | Saved clipboard snapshot | RAM | Duration of one conversion |
 | Undo target (original + replacement) | RAM | ~4 seconds after an LLM replace, or until the next key |
+| LLM-fix history (last 30 from/to pairs) | `/tmp/switchfix.llm-history.json` | Until reboot or tmp cleanup. Used by the Plasma widget; click-to-copy only. |
 | Config (incl. LLM token) | `~/.config/switchfix/config.toml` | Until you delete it |
 | Logs | journald (optional) | Never include typed text (`privacy.log_text_content = false`, default). Never include the API token. |
 

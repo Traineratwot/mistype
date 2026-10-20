@@ -15,7 +15,7 @@ against: a compromised kernel or a root attacker.
 | Session D-Bus | `org.kde.KeyboardLayouts` — get/set layout | Minimal (layout index only) | No other bus names claimed |
 | Clipboard | Save/put/get/restore around a conversion | Transient exposure of one selection | Marker protocol + best-effort restore; no persistence |
 | Outbound HTTP(S) (optional) | «LLM-fix selection» to your configured OpenAI-compatible API | Selected text leaves the machine | Off unless `llm.base_url` is set; only the selection + system prompt are sent; token never logged |
-| systemd user sandbox | Limits blast radius of a compromised binary | — | `ProtectSystem=strict`, `ProtectHome=read-only`, `NoNewPrivileges`, `RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6`, `DevicePolicy=closed` + explicit `/dev/input` + `/dev/uinput` |
+| systemd user sandbox | Limits blast radius of a compromised binary | — | `ProtectSystem=strict`, `ProtectHome=read-only`, `NoNewPrivileges`, `RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6`, `DevicePolicy=closed` + explicit `/dev/input` + `/dev/uinput`. `PrivateTmp=no` so `/tmp` IPC (llm-history, reload flags) stays visible to CLI + Plasma widget |
 
 ## Known limitations
 

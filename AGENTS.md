@@ -347,15 +347,19 @@ Watch `RUST_LOG=debug` for `evdev key …` / `hotkey match` / `hotkey received`.
 
 - `packaging/systemd/switchfix.service` — user unit (do **not** enable on
   install). `RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6`
-  (TCP is required for the optional LLM API).
+  (TCP is required for the optional LLM API). **`PrivateTmp=no`** — daemon IPC
+  lives in `/tmp` (`llm-history.json`, toggle/reload/restart flags, heartbeat)
+  and must stay visible to `switchfix` CLI + the Plasma widget.
 - `packaging/systemd/99-switchfix-uinput.rules` — uinput group/mode
 - `packaging/desktop/switchfix.desktop` — KDE autostart bits
+- `packaging/plasmoid/org.switchfix.suggestions` — Plasma widget «SwitchFix LLM»
+  (request history + copy; installed to `~/.local/share/plasma/plasmoids/`).
+  No suggest-bar / dictionary UI.
 - `packaging/install.sh`, `packaging/build-deb.sh` → `target/switchfix_0.1.0_amd64.deb`
 - `assets/maps/en2ru.json`, `ru2en.json`, `assets/icons/switchfix.svg`
 
-No plasmoid ships; DEBIAN control has **no hunspell recommends** (dictionaries
-are gone). Docs: `docs/PLAN.md`, `PRIVACY.md`, `SECURITY.md`,
-`MANUAL-TEST-MATRIX.md`.
+DEBIAN control has **no hunspell recommends** (dictionaries are gone).
+Docs: `docs/PLAN.md`, `PRIVACY.md`, `SECURITY.md`, `MANUAL-TEST-MATRIX.md`.
 
 ---
 

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use switchfix_app::config::Llm;
-use switchfix_app::ports::{TextCorrector, TextFixError};
+use switchfix_app::ports::{LlmProbe, TextCorrector, TextFixError};
 use tracing::debug;
 
 pub struct OpenAiCorrector {
@@ -32,6 +32,10 @@ impl OpenAiCorrector {
 
     pub fn endpoint(&self) -> String {
         format!("{}/v1/chat/completions", self.base)
+    }
+
+    pub fn models_endpoint(base: &str) -> String {
+        format!("{}/v1/models", base.trim_end_matches('/'))
     }
 
     /// Pure request builder — unit-testable without HTTP.
@@ -65,6 +69,44 @@ impl OpenAiCorrector {
             return Err(TextFixError::Api("empty completion".into()));
         }
         Ok(trimmed.to_string())
+    }
+
+    /// Pure parser for `GET /v1/models` → `data[].id`.
+    pub fn parse_models(body: &str) -> Result<Vec<String>, TextFixError> {
+        let v: serde_json::Value = serde_json::from_str(body)
+            .map_err(|e| TextFixError::Parse(format!("json: {e}")))?;
+        let arr = v
+            .get("data")
+            .and_then(|d| d.as_array())
+            .ok_or_else(|| TextFixError::Parse("missing data[]".into()))?;
+        let mut out: Vec<String> = arr
+            .iter()
+            .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(|s| s.to_string()))
+            .collect();
+        out.sort();
+        out.dedup();
+        Ok(out)
+    }
+
+    fn get_json(url: &str, token: &str, timeout: Duration) -> Result<String, TextFixError> {
+        debug!(url = %url, "openai corrector: GET");
+        let mut req = ureq::get(url).timeout(timeout);
+        if !token.is_empty() {
+            req = req.set("Authorization", &format!("Bearer {token}"));
+        }
+        let resp = req.call().map_err(|e| TextFixError::Http(format!("{e}")))?;
+        let status = resp.status();
+        if !(200..300).contains(&status) {
+            let snippet: String = resp
+                .into_string()
+                .unwrap_or_default()
+                .chars()
+                .take(200)
+                .collect();
+            return Err(TextFixError::Api(format!("HTTP {status}: {snippet}")));
+        }
+        resp.into_string()
+            .map_err(|e| TextFixError::Http(format!("read body: {e}")))
     }
 
     fn post_chat(&self, body: &serde_json::Value) -> Result<String, TextFixError> {
@@ -122,6 +164,35 @@ impl TextCorrector for OpenAiCorrector {
         })
         .await
         .map_err(|e| TextFixError::Http(format!("join: {e}")))?
+    }
+}
+
+#[async_trait]
+impl LlmProbe for OpenAiCorrector {
+    async fn list_models(
+        &self,
+        base_url: &str,
+        api_token: &str,
+        timeout_ms: u64,
+    ) -> Result<Vec<String>, TextFixError> {
+        let url = Self::models_endpoint(base_url);
+        let token = api_token.to_string();
+        let timeout = Duration::from_millis(timeout_ms);
+        tokio::task::spawn_blocking(move || {
+            let body = Self::get_json(&url, &token, timeout)?;
+            Self::parse_models(&body)
+        })
+        .await
+        .map_err(|e| TextFixError::Http(format!("join: {e}")))?
+    }
+
+    async fn test_chat(&self, cfg: &Llm) -> Result<String, TextFixError> {
+        let probe = OpenAiCorrector::new(cfg);
+        // Tiny fixed prompt — just prove the endpoint answers.
+        let body = Self::build_request_json("Ответь одним словом: ок", &cfg.system_prompt, &cfg.model);
+        tokio::task::spawn_blocking(move || probe.post_chat(&body))
+            .await
+            .map_err(|e| TextFixError::Http(format!("join: {e}")))?
     }
 }
 
@@ -186,5 +257,30 @@ mod tests {
         };
         let c = OpenAiCorrector::new(&cfg);
         assert_eq!(c.endpoint(), "https://api.openai.com/v1/chat/completions");
+    }
+
+    #[test]
+    fn parse_models_lists_ids_sorted() {
+        let raw = r#"{"data":[{"id":"b-model"},{"id":"a-model"},{"id":"a-model"}]}"#;
+        assert_eq!(
+            OpenAiCorrector::parse_models(raw).unwrap(),
+            vec!["a-model".to_string(), "b-model".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_models_missing_data_is_error() {
+        assert!(matches!(
+            OpenAiCorrector::parse_models(r#"{"object":"list"}"#),
+            Err(TextFixError::Parse(_))
+        ));
+    }
+
+    #[test]
+    fn models_endpoint_joins_base() {
+        assert_eq!(
+            OpenAiCorrector::models_endpoint("http://127.0.0.1:11434/"),
+            "http://127.0.0.1:11434/v1/models"
+        );
     }
 }

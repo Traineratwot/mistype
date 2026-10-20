@@ -3,13 +3,16 @@
 //! Hotkeys are bound by click-to-capture: press the button, then press the
 //! desired key combination. Escape cancels.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use iced::keyboard::{Key, Modifiers};
 use iced::widget::{
     button, checkbox, column, container, mouse_area, row, scrollable, text, tooltip,
 };
 use iced::{Element, Length, Subscription, Task, Theme};
 use switchfix_app::config::AppConfig;
-use switchfix_app::ports::{ConfigError, ConfigStore};
+use switchfix_app::ports::{ConfigError, ConfigStore, LlmProbe};
 use tracing::info;
 
 pub struct SettingsApp {
@@ -25,6 +28,18 @@ pub struct SettingsApp {
     mods: [HotkeyMods; HotkeyField::COUNT],
     /// Daemon pause flag written while capturing so hotkeys don't fire.
     paused_for_capture: bool,
+    /// Optional LLM connection probe (list models + test chat).
+    probe: Option<Arc<dyn LlmProbe>>,
+    /// Model ids fetched from `GET /v1/models` — shown as clickable hints.
+    models: Vec<String>,
+    /// Last LLM test / models result for the status line.
+    llm_status: String,
+    /// True while a test/models request is in flight.
+    llm_busy: bool,
+    /// Spinner animation frame (braille dots).
+    spin_frame: usize,
+    /// Bumps on every models fetch so stale results are dropped.
+    models_gen: u64,
 }
 
 /// Modifier checkboxes bound to a single hotkey (not global).
@@ -96,6 +111,16 @@ pub enum Message {
     LlmModel(String),
     LlmSystemPrompt(String),
     LlmTimeout(String),
+    /// Probe the API (tiny completion) and refresh the model list.
+    TestLlm,
+    /// Models arrived from `GET /v1/models` (gen, result).
+    ModelsLoaded(u64, Result<Vec<String>, String>),
+    /// Test completion finished.
+    LlmTested(Result<String, String>),
+    /// Click a model hint under the model field.
+    PickModel(String),
+    /// Advance the busy spinner.
+    SpinnerTick,
     StartCapture(HotkeyField),
     CancelCapture,
     ClearHotkey(HotkeyField),
@@ -149,6 +174,61 @@ fn write_restart_flag() {
     let _ = std::fs::write(restart_flag_path(), token.to_string());
 }
 
+/// Fetch model ids for the hints row. With `debounce`, wait briefly so
+/// typing in `base_url` does not spam the API on every keystroke.
+fn fetch_models_task(app: &mut SettingsApp, debounce: bool) -> Task<Message> {
+    let Some(probe) = app.probe.clone() else {
+        return Task::none();
+    };
+    let base = app.cfg.llm.base_url.trim().to_string();
+    if base.is_empty() {
+        app.models.clear();
+        app.models_gen = app.models_gen.wrapping_add(1);
+        app.llm_busy = false;
+        return Task::none();
+    }
+    app.models_gen = app.models_gen.wrapping_add(1);
+    let gen = app.models_gen;
+    let token = app.cfg.llm.api_token.clone();
+    let timeout = app.cfg.llm.timeout_ms;
+    if !debounce {
+        app.llm_busy = true;
+    }
+    Task::future(async move {
+        if debounce {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+        }
+        let result = probe
+            .list_models(&base, &token, timeout)
+            .await
+            .map_err(|e| e.to_string());
+        Message::ModelsLoaded(gen, result)
+    })
+}
+
+/// Tiny chat completion + refresh models.
+fn test_llm_task(app: &mut SettingsApp) -> Task<Message> {
+    let Some(probe) = app.probe.clone() else {
+        app.llm_status = "Проба недоступна в этой сборке".into();
+        return Task::none();
+    };
+    let cfg = app.cfg.llm.clone();
+    let models_task = fetch_models_task(app, false);
+    let test_task = Task::future(async move {
+        let result = probe
+            .test_chat(&cfg)
+            .await
+            .map(|s| {
+                let s = s.trim();
+                let snippet: String = s.chars().take(80).collect();
+                snippet
+            })
+            .map_err(|e| e.to_string());
+        Message::LlmTested(result)
+    });
+    Task::batch([test_task, models_task])
+}
+
 fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
     match message {
         Message::ToggleEnabled(v) => app.cfg.general.enabled_on_start = v,
@@ -156,13 +236,65 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
         Message::ToggleHotkeyConsume(v) => app.cfg.hotkeys.hotkey_consume = v,
         Message::ToggleLlmEnabled(v) => app.cfg.llm.enabled = v,
         Message::Language(s) => app.cfg.general.language = s,
-        Message::LlmBaseUrl(s) => app.cfg.llm.base_url = s,
-        Message::LlmApiToken(s) => app.cfg.llm.api_token = s,
+        Message::LlmBaseUrl(s) => {
+            app.cfg.llm.base_url = s;
+            // Auto-refresh model hints after the user pauses typing.
+            return fetch_models_task(app, true);
+        }
+        Message::LlmApiToken(s) => {
+            app.cfg.llm.api_token = s;
+            return fetch_models_task(app, true);
+        }
         Message::LlmModel(s) => app.cfg.llm.model = s,
         Message::LlmSystemPrompt(s) => app.cfg.llm.system_prompt = s,
         Message::LlmTimeout(s) => {
             if let Ok(n) = s.trim().parse::<u64>() {
                 app.cfg.llm.timeout_ms = n;
+            }
+        }
+        Message::PickModel(id) => {
+            app.cfg.llm.model = id.clone();
+            app.status = format!("Модель: {id}");
+        }
+        Message::SpinnerTick => {
+            app.spin_frame = app.spin_frame.wrapping_add(1);
+        }
+        Message::TestLlm => {
+            app.llm_busy = true;
+            app.llm_status = "Запрос к LLM…".into();
+            return test_llm_task(app);
+        }
+        Message::ModelsLoaded(gen, result) => {
+            if gen != app.models_gen {
+                return Task::none(); // stale
+            }
+            app.llm_busy = false;
+            match result {
+                Ok(list) => {
+                    app.llm_status = if list.is_empty() {
+                        "Модели: список пуст".into()
+                    } else {
+                        format!("Модели загружены: {}", list.len())
+                    };
+                    app.models = list;
+                }
+                Err(e) => {
+                    app.models.clear();
+                    app.llm_status = format!("Модели: {e}");
+                }
+            }
+        }
+        Message::LlmTested(result) => {
+            app.llm_busy = false;
+            match result {
+                Ok(snippet) => {
+                    app.llm_status = format!("Тест OK: {snippet}");
+                    app.status = "LLM API отвечает".into();
+                }
+                Err(e) => {
+                    app.llm_status = format!("Тест FAILED: {e}");
+                    app.status = "LLM API не отвечает — проверьте адрес и токен".into();
+                }
             }
         }
         Message::StartCapture(field) => {
@@ -319,11 +451,17 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
 }
 
 fn subscription(app: &SettingsApp) -> Subscription<Message> {
-    if app.capturing.is_some() {
+    let keys = if app.capturing.is_some() {
         iced::keyboard::on_key_press(|key, modifiers| Some(Message::KeyPressed(key, modifiers)))
     } else {
         Subscription::none()
-    }
+    };
+    let spin = if app.llm_busy {
+        iced::time::every(Duration::from_millis(120)).map(|_| Message::SpinnerTick)
+    } else {
+        Subscription::none()
+    };
+    Subscription::batch([keys, spin])
 }
 
 fn is_modifier_key(key: &Key) -> bool {
@@ -686,6 +824,43 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
     );
 
     // ── LLM-исправление ────────────────────────────────────────────────
+    let model_hints: Element<'_, Message> = if app.models.is_empty() {
+        row![].spacing(0).into()
+    } else {
+        // Wrap chips into rows of 4 so the card stays readable.
+        let mut rows = column![].spacing(6);
+        let mut current = row![].spacing(6);
+        let mut in_row = 0usize;
+        for id in &app.models {
+            let label = id.clone();
+            let selected = app.cfg.llm.model == *id;
+            let btn = button(text(label.clone()).size(12))
+                .on_press(Message::PickModel(label))
+                .padding([4, 8])
+                .style(if selected {
+                    iced::widget::button::primary
+                } else {
+                    iced::widget::button::secondary
+                });
+            current = current.push(btn);
+            in_row += 1;
+            if in_row == 4 {
+                rows = rows.push(current);
+                current = row![].spacing(6);
+                in_row = 0;
+            }
+        }
+        if in_row > 0 {
+            rows = rows.push(current);
+        }
+        column![
+            text("Доступные модели (нажмите, чтобы выбрать):").size(12),
+            rows,
+        ]
+        .spacing(6)
+        .into()
+    };
+
     let llm = section_card(
         "LLM-исправление",
         column![
@@ -734,17 +909,40 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
                 iced::widget::text_input("gpt-4o-mini", &cfg.llm.model)
                     .on_input(Message::LlmModel)
                     .width(Length::Fill),
+                if app.llm_busy {
+                    button("Тест…").padding([6, 12])
+                } else {
+                    button("Тест").on_press(Message::TestLlm).padding([6, 12])
+                },
+                if app.llm_busy {
+                    button("Модели…").padding([6, 12])
+                } else {
+                    button("Модели").on_press(Message::TestLlm).padding([6, 12])
+                },
             ]
             .spacing(8)
             .align_y(iced::Alignment::Center),
-            row![
-                text("Системный промпт:"),
-                iced::widget::text_input("промпт", &cfg.llm.system_prompt)
-                    .on_input(Message::LlmSystemPrompt)
-                    .width(Length::Fill),
-            ]
-            .spacing(8)
-            .align_y(iced::Alignment::Center),
+            model_hints,
+            {
+                const SPIN: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+                let spinner = if app.llm_busy {
+                    text(SPIN[app.spin_frame % SPIN.len()]).size(16)
+                } else {
+                    text(" ").size(16)
+                };
+                let label = if app.llm_status.is_empty() {
+                    text(" ").size(12)
+                } else {
+                    text(&app.llm_status).size(12)
+                };
+                row![spinner, label]
+                    .spacing(8)
+                    .align_y(iced::Alignment::Center)
+            },
+            text("Системный промпт:").size(13),
+            iced::widget::text_input("промпт", &cfg.llm.system_prompt)
+                .on_input(Message::LlmSystemPrompt)
+                .width(Length::Fill),
             text("Отправляется как system-сообщение перед выделенным текстом.")
                 .size(12),
             row![
@@ -871,6 +1069,7 @@ fn theme(_app: &SettingsApp) -> Theme {
 pub fn run_settings(
     store: Box<dyn ConfigStore + Send + Sync>,
     config_dir: std::path::PathBuf,
+    probe: Option<Arc<dyn LlmProbe>>,
 ) -> iced::Result {
     // Hybrid-GPU + Wayland: the Vulkan surface can come up with an empty
     // present-mode list (dmabuf import failure on NVIDIA), which panics wgpu.
@@ -888,7 +1087,7 @@ pub fn run_settings(
     for f in HotkeyField::ALL {
         mods[f.index()] = mods_from_combo(f.get(&cfg));
     }
-    let app = SettingsApp {
+    let mut app = SettingsApp {
         cfg,
         store,
         config_dir,
@@ -896,13 +1095,22 @@ pub fn run_settings(
         capturing: None,
         mods,
         paused_for_capture: false,
+        probe,
+        models: Vec::new(),
+        llm_status: String::new(),
+        llm_busy: false,
+        spin_frame: 0,
+        models_gen: 0,
     };
+
+    // Auto-load model hints if the API is already configured.
+    let boot = fetch_models_task(&mut app, false);
 
     iced::application("SwitchFix — настройки", update, view)
         .theme(theme)
         .subscription(subscription)
         .window_size((640.0, 900.0))
-        .run_with(move || (app, Task::none()))
+        .run_with(move || (app, boot))
 }
 
 #[cfg(test)]

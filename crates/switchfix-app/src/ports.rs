@@ -208,6 +208,21 @@ pub trait TextCorrector: Send + Sync {
     async fn correct_text(&self, text: &str) -> Result<String, TextFixError>;
 }
 
+/// Connection probe for the settings UI: list models + tiny test completion.
+#[async_trait]
+pub trait LlmProbe: Send + Sync {
+    /// `GET {base}/v1/models` → model ids (empty list if none).
+    async fn list_models(
+        &self,
+        base_url: &str,
+        api_token: &str,
+        timeout_ms: u64,
+    ) -> Result<Vec<String>, TextFixError>;
+    /// Tiny chat completion to prove the endpoint works.
+    /// Returns a short reply snippet for the status line.
+    async fn test_chat(&self, cfg: &crate::config::Llm) -> Result<String, TextFixError>;
+}
+
 #[async_trait]
 pub trait LayoutSwitcher: Send + Sync {
     async fn current(&self) -> Result<LayoutIndex, LayoutError>;

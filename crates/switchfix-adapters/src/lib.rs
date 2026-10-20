@@ -4,8 +4,9 @@ pub mod platform;
 
 pub use platform::portable::config_store::{ensure_config, TomlConfigStore};
 pub use platform::portable::{
-    clear_daemon_heartbeat, daemon_heartbeat_path, load_conversion_set, read_daemon_heartbeat,
-    seed_default_maps, user_maps_dir, write_daemon_heartbeat, DaemonHeartbeat, LayoutCharMapper,
+    append_llm_history, clear_daemon_heartbeat, daemon_heartbeat_path, llm_history_path,
+    load_conversion_set, read_daemon_heartbeat, read_llm_history, seed_default_maps,
+    user_maps_dir, write_daemon_heartbeat, DaemonHeartbeat, LayoutCharMapper, LlmHistoryEntry,
     OpenAiCorrector, SharedTypingBuffer,
 };
 pub use platform::{
