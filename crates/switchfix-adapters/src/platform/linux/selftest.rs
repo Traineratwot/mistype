@@ -108,8 +108,6 @@ pub async fn run_hotkey_selftest() -> SelfTestReport {
             HotkeyBinding::parse(TEST_COMBO).expect("valid"),
             HotkeyEvent::ConvertSelection,
         )],
-        dynamic_bindings: Vec::new(),
-        bar_visible: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         // Passive: do not grab keyboards (self-test must not break typing).
         consume: false,
         buffer,

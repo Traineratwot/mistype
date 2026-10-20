@@ -13,8 +13,8 @@ use switchfix_app::ports::{
 use tracing::{debug, info, warn};
 
 use crate::platform::portable::{
-    ArboardClipboard, LayoutCharMapper, LogNotifier, ManualHotkeySource, SharedSuggestionPresenter,
-    SharedTypingBuffer, SuggestionState, TomlConfigStore, ZspellDictionary,
+    ArboardClipboard, LayoutCharMapper, LogNotifier, ManualHotkeySource, SharedTypingBuffer,
+    TomlConfigStore,
 };
 use crate::platform::{BuildOptions, Platform, PlatformError, PlatformInfo, PlatformServices};
 
@@ -125,15 +125,9 @@ impl Platform for KdePlatform {
 
         // Hotkeys
         let parsed_bindings = super::parse_hotkey_bindings(cfg);
-        let dynamic_bindings = super::dynamic_suggestion_bindings(cfg);
-        let suggestion_state = SuggestionState::new();
-        let presenter = SharedSuggestionPresenter::new(suggestion_state);
-        let bar_visible = presenter.visible_flag();
         let hotkeys: Box<dyn HotkeySource> = if opts.allow_evdev {
             match EvdevHotkeySource::open_with(EvdevOptions {
                 bindings: parsed_bindings,
-                dynamic_bindings,
-                bar_visible,
                 consume: cfg.hotkeys.hotkey_consume,
                 buffer: buffer.clone(),
                 mapper: mapper.clone(),
@@ -155,23 +149,6 @@ impl Platform for KdePlatform {
             }
         } else {
             Box::new(ManualHotkeySource::new())
-        };
-
-        // Spell dictionaries (optional — degrade gracefully). Compat layer.
-        let spell = if cfg.spell.enabled {
-            let user_dic = dirs::data_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("switchfix")
-                .join("user.dic");
-            let d = ZspellDictionary::load(&cfg.spell.languages, user_dic);
-            if d.has_any() {
-                Some(d as Arc<dyn switchfix_app::ports::SpellChecker>)
-            } else {
-                warn!("no spell dictionaries found — spellcheck disabled");
-                None
-            }
-        } else {
-            None
         };
 
         let config: Arc<dyn ConfigStore> = Arc::new(TomlConfigStore::open_default());
@@ -199,8 +176,6 @@ impl Platform for KdePlatform {
             config,
             notifier,
             focus,
-            spell,
-            suggestions: Arc::new(presenter) as Arc<dyn switchfix_app::ports::SuggestionPresenter>,
         })
     }
 }

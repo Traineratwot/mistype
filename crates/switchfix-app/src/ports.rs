@@ -65,12 +65,15 @@ pub enum NotifyError {
     Failed(String),
 }
 
+/// Errors from the external text corrector (LLM API).
 #[derive(Debug, Error)]
-pub enum SpellError {
-    #[error("dictionary unavailable: {0}")]
-    Unavailable(String),
-    #[error("spell failed: {0}")]
-    Failed(String),
+pub enum TextFixError {
+    #[error("http: {0}")]
+    Http(String),
+    #[error("api: {0}")]
+    Api(String),
+    #[error("parse: {0}")]
+    Parse(String),
 }
 
 // ---------- payloads ----------
@@ -101,11 +104,7 @@ pub enum NotifyLevel {
 pub enum HotkeyEvent {
     ConvertSelection,
     ToggleEnabled,
-    FixSpelling,
     LlmFixSelection,
-    AcceptSuggestion(u8),
-    AddToDictionary,
-    DismissSuggestions,
 }
 
 /// A word boundary / fragment update from the typing buffer.
@@ -118,22 +117,10 @@ pub enum WordEvent {
         separator: char,
     },
     /// Characters were added — current in-progress fragment.
+    /// Also used to cancel a pending LLM undo (user typed something else).
     Updated(String),
-    /// Physical Backspace (one character). Used to undo a recent auto-replace.
+    /// Physical Backspace (one character). Used to undo a recent LLM replace.
     Backspace,
-}
-
-/// Payload for the suggestion bar.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SuggestionUi {
-    /// Original word/fragment being replaced.
-    pub original: String,
-    /// Candidate slots, in display order (max `suggest_count`).
-    pub slots: Vec<switchfix_domain::Suggestion>,
-    /// Whether the "add to dictionary" action is offered.
-    pub can_add_to_dict: bool,
-    /// How long the bar stays up if the user does nothing.
-    pub timeout_ms: u64,
 }
 
 // ---------- ports ----------
@@ -211,72 +198,14 @@ pub trait TypingBufferPort: Send + Sync {
     }
 }
 
-/// Dictionary-backed spelling: check, suggest, learn.
-///
-/// This is the **compat / local dictionary layer** (zspell + user.dic).
-/// Higher-quality ranking / realword fixes go through [`ContextCorrector`].
+/// Whole-selection text fixer («LLM-fix selection»).
 #[async_trait]
-pub trait SpellChecker: Send + Sync {
-    /// `true` if the word is spelled correctly (or no dictionary is loaded).
-    fn is_correct(&self, word: &str, lang: &str) -> bool;
-    /// Up to `n` spelling corrections for a misspelled word.
-    fn suggest(&self, word: &str, lang: &str, n: usize) -> Vec<String>;
-    /// Up to `n` dictionary words starting with `prefix` (word completion).
-    fn complete(&self, prefix: &str, lang: &str, n: usize) -> Vec<String>;
-    /// Persist `word` to the personal dictionary so it is never flagged again.
-    fn add_to_dictionary(&self, word: &str) -> Result<(), SpellError>;
-    /// Language ids that have a loaded dictionary (e.g. `["ru", "en"]`).
-    fn languages(&self) -> Vec<String>;
-}
-
-/// One correction from an external / contextual engine (LanguageTool, LLM).
-#[derive(Debug, Clone, PartialEq)]
-pub struct ContextFix {
-    /// Replacement for the target word (or the whole phrase if `word` is None).
-    pub text: String,
-    /// 0.0..=1.0 — how sure the engine is. ≥0.75 can drive auto-replace.
-    pub confidence: f32,
-    /// `true` when the engine believes the original word is already fine.
-    pub is_ok: bool,
-}
-
-/// Contextual spelling / grammar backend (LanguageTool, tiny LLM, …).
-///
-/// Optional hybrid layer over the dictionary [`SpellChecker`]. Absent or
-/// erroring backends must never block the dictionary path.
-#[async_trait]
-pub trait ContextCorrector: Send + Sync {
-    /// Human-readable id for logs (`languagetool`, `llm`, …).
+pub trait TextCorrector: Send + Sync {
+    /// Human-readable id for logs (`openai`, …).
     fn name(&self) -> &'static str;
-    /// Suggest a fix for `word` given surrounding `context`.
-    ///
-    /// `context` is the recent typed sentence **ending with the target
-    /// word** (e.g. `"он ачала"` for `word="ачала"`). Backends must fix
-    /// ONLY `word` — never rewrite the whole sentence.
-    ///
-    /// Return `Ok(vec![ContextFix { is_ok: true, .. }])` when the word is fine
-    /// (veto dictionary false positives). Empty `Ok` = no opinion.
-    async fn correct(
-        &self,
-        word: &str,
-        context: &str,
-        lang: &str,
-    ) -> Result<Vec<ContextFix>, SpellError>;
-
-    /// Fix spelling/grammar of a whole text block (the «LLM-fix selection»
-    /// hotkey). Returns the corrected text; `Ok(original)` means no change.
-    /// Backends that cannot do whole-text correction just return the input.
-    async fn correct_text(&self, text: &str, _lang: &str) -> Result<String, SpellError> {
-        Ok(text.to_string())
-    }
-}
-
-/// Floating suggestion bar (layer-shell strip on KDE Wayland).
-#[async_trait]
-pub trait SuggestionPresenter: Send + Sync {
-    async fn show(&self, model: SuggestionUi) -> Result<(), NotifyError>;
-    async fn hide(&self) -> Result<(), NotifyError>;
-    fn is_visible(&self) -> bool;
+    /// Fix spelling/grammar of a whole text block.
+    /// `Ok(original)` or empty string = no change.
+    async fn correct_text(&self, text: &str) -> Result<String, TextFixError>;
 }
 
 #[async_trait]

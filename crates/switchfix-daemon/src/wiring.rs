@@ -6,7 +6,6 @@ use switchfix_adapters::platform::{create_platform, BuildOptions, PlatformServic
 use switchfix_adapters::{ensure_config, load_conversion_set, seed_default_maps, TomlConfigStore};
 use switchfix_app::config::AppConfig;
 use switchfix_app::ports::{ConfigStore, HotkeySource, TypingBufferPort};
-use switchfix_app::services::SpellService;
 use switchfix_app::CorrectionService;
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
@@ -16,7 +15,6 @@ use tracing::{info, warn};
 #[allow(dead_code)]
 pub struct AppContext {
     pub service: Arc<CorrectionService>,
-    pub spell: Option<Arc<SpellService>>,
     pub config_tx: watch::Sender<AppConfig>,
     pub config_rx: watch::Receiver<AppConfig>,
     pub buffer: Arc<dyn TypingBufferPort>,
@@ -67,7 +65,7 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let PlatformServices {
-        injector,
+        injector: _injector,
         clipboard,
         selection,
         buffer,
@@ -76,12 +74,10 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
         config,
         notifier,
         focus,
-        spell,
-        suggestions,
     } = services;
 
     let service = Arc::new(CorrectionService::with_focus(
-        injector.clone(),
+        _injector.clone(),
         clipboard,
         selection,
         buffer.clone() as Arc<dyn TypingBufferPort>,
@@ -93,69 +89,29 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
         cfg.general.enabled_on_start,
     ));
 
-    let spell_svc = spell.map(|checker| {
-        let svc = Arc::new(SpellService::with_focus(
-            checker,
-            injector,
-            suggestions,
-            buffer.clone(),
-            tables,
-            config_rx.clone(),
-            focus,
-            cfg.general.enabled_on_start,
-        ));
-        // Hybrid context layer (LanguageTool / LLM) — optional.
-        match switchfix_adapters::platform::portable::build_context_corrector(
-            &cfg.spell.backend,
-            &cfg.spell.lt_url,
-            &cfg.spell.llm_cmd,
-        ) {
-            Some(ctx) => {
-                let name = ctx.name();
-                let arc: std::sync::Arc<dyn switchfix_app::ports::ContextCorrector> =
-                    std::sync::Arc::from(ctx);
-                svc.set_context_corrector(arc.clone());
-                svc.set_context_status(true, name);
-                // Also feed the «LLM-fix selection» hotkey in CorrectionService.
-                service.set_context_corrector(arc);
-            }
-            None => {
-                svc.set_context_status(false, "");
-            }
-        }
-        svc
-    });
-    if spell_svc.is_some() {
-        info!("spellcheck wired (mode={})", cfg.spell.mode);
-    } else {
-        info!("spellcheck unavailable (no dictionaries or disabled)");
-    }
+    // External OpenAI-compatible corrector (preferred for LlmFixSelection).
+    install_text_corrector(&service, &cfg);
 
     // Status dump so the operator can see at a glance what is active.
     info!("--- SwitchFix status ---");
     info!(
-        "hotkeys: convert='{}' toggle='{}' fix='{}' consume={}",
+        "hotkeys: convert='{}' toggle='{}' llm-fix='{}' consume={}",
         cfg.hotkeys.convert_selection,
         cfg.hotkeys.toggle_enabled,
-        cfg.hotkeys.fix_spelling,
+        cfg.hotkeys.llm_fix_selection,
         cfg.hotkeys.hotkey_consume
     );
-    info!(
-        "spell: enabled={} mode='{}' backend='{}' langs={:?} min_word_len={} suggest_count={} auto_fix_min_len={} sound={}",
-        cfg.spell.enabled,
-        cfg.spell.mode,
-        cfg.spell.backend,
-        cfg.spell.languages,
-        cfg.spell.min_word_len,
-        cfg.spell.suggest_count,
-        cfg.spell.auto_fix_min_len,
-        cfg.spell.sound
-    );
-    if !cfg.spell.lt_url.is_empty() {
-        info!("spell context: languagetool url={}", cfg.spell.lt_url);
-    }
-    if !cfg.spell.llm_cmd.is_empty() {
-        info!("spell context: llm cmd={}", cfg.spell.llm_cmd);
+    if cfg.llm.enabled && !cfg.llm.base_url.trim().is_empty() {
+        info!(
+            "llm api: configured (base={}, model={:?})",
+            cfg.llm.base_url, cfg.llm.model
+        );
+    } else {
+        info!(
+            "llm api: not configured (enabled={}, base_url set={})",
+            cfg.llm.enabled,
+            !cfg.llm.base_url.trim().is_empty()
+        );
     }
     info!(
         "typing_buffer={} max_keys={}  layouts.active={:?}",
@@ -165,16 +121,12 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
         "enabled_on_start={}  fullscreen_guard={}  excluded_apps={:?}",
         cfg.general.enabled_on_start, cfg.behavior.disable_in_fullscreen, cfg.behavior.excluded_apps
     );
-    if spell_svc.is_some() {
-        info!("suggestions UI: plasmoid / tray menu / Ctrl+1..N; peek via `switchfix suggest-peek`");
-    }
     info!("-----------------------");
 
     info!("SwitchFix wired up");
 
     Ok(AppContext {
         service,
-        spell: spell_svc,
         config_tx,
         config_rx,
         buffer,
@@ -184,11 +136,27 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
     })
 }
 
+/// Build and install the external OpenAI-compatible corrector from `[llm]`.
+/// Called at startup and again on config reload so URL/token/prompt changes
+/// take effect without a full restart.
+pub fn install_text_corrector(service: &Arc<CorrectionService>, cfg: &AppConfig) {
+    if cfg.llm.enabled && !cfg.llm.base_url.trim().is_empty() {
+        let corrector = switchfix_adapters::platform::portable::OpenAiCorrector::new(&cfg.llm);
+        info!(
+            "llm-fix selection: backend=openai base={} model={:?}",
+            cfg.llm.base_url, cfg.llm.model
+        );
+        service.set_text_corrector(Arc::new(corrector));
+    } else {
+        info!("llm-fix selection: openai backend off (enabled={} base_url empty={})",
+            cfg.llm.enabled, cfg.llm.base_url.trim().is_empty());
+    }
+}
+
 /// Spawn the command dispatcher for tray commands.
 pub fn spawn_tray_dispatcher(
     mut cmd_rx: mpsc::Receiver<switchfix_ui::tray::TrayCommand>,
     service: Arc<CorrectionService>,
-    spell: Option<Arc<SpellService>>,
     on_settings: Arc<dyn Fn() + Send + Sync>,
     on_quit: Arc<dyn Fn() + Send + Sync>,
 ) {
@@ -199,9 +167,6 @@ pub fn spawn_tray_dispatcher(
             match cmd {
                 TrayCommand::ToggleEnabled => {
                     service.toggle_enabled().await;
-                    if let Some(s) = &spell {
-                        s.set_enabled(service.is_enabled());
-                    }
                 }
                 TrayCommand::ConvertSelection => {
                     let _ = service.handle(CorrectionRequest::ConvertSelection).await;
@@ -213,23 +178,6 @@ pub fn spawn_tray_dispatcher(
                 TrayCommand::Quit => {
                     on_quit();
                     break;
-                }
-                TrayCommand::AcceptSuggestion(n) => {
-                    if let Some(s) = &spell {
-                        let action = s.accept_slot(n).await;
-                        info!("tray accept {n}: {action:?}");
-                    }
-                }
-                TrayCommand::LearnWord => {
-                    if let Some(s) = &spell {
-                        let action = s.add_to_dictionary().await;
-                        info!("tray learn: {action:?}");
-                    }
-                }
-                TrayCommand::DismissSuggestions => {
-                    if let Some(s) = &spell {
-                        s.dismiss().await;
-                    }
                 }
             }
         }

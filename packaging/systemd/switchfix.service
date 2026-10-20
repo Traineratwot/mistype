@@ -22,7 +22,8 @@ RestrictSUIDSGID=yes
 RestrictRealtime=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
-RestrictAddressFamilies=AF_UNIX AF_NETLINK
+# AF_INET/6 needed only for the optional LLM API (llm.base_url).
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
 # evdev/uinput need /dev/input and /dev/uinput.
 DeviceAllow=/dev/input/event* rw
 DeviceAllow=/dev/uinput rw

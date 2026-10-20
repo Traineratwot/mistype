@@ -18,7 +18,7 @@ toml = { workspace = true }
 dirs = { workspace = true }
 arboard = { workspace = true }
 uuid = { workspace = true }
-zspell = { workspace = true }
+ureq = { version = "2", default-features = false, features = ["json", "tls"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { workspace = true }

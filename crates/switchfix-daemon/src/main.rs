@@ -7,13 +7,13 @@ mod wiring;
 use clap::{Parser, Subcommand};
 use switchfix_domain::CorrectionRequest;
 use switchfix_ui::tray::TrayModel;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
 #[command(name = "switchfix", version, about = "Fix text typed in the wrong keyboard layout")]
 struct Cli {
-    /// Verbose logging (debug) — shows spell/hotkey decisions at runtime.
+    /// Verbose logging (debug) — shows hotkey and LLM decisions at runtime.
     #[arg(short, long, global = true)]
     verbose: bool,
     #[command(subcommand)]
@@ -48,27 +48,6 @@ enum Command {
     Beep,
     /// Inject a synthetic hotkey (ctrl+f20) and verify evdev interception works.
     Selftest,
-    /// Check spelling of a word (or --text) and print suggestions.
-    Spell {
-        /// Word / text to check. If omitted, reads stdin.
-        #[arg(long)]
-        text: Option<String>,
-    },
-    /// Print current suggestion-bar state as JSON (for the Plasma widget).
-    SuggestPeek,
-    /// Print LLM/spell statistics and recent transform history (JSON).
-    SpellStats,
-    /// Accept suggestion slot N (1-based) from the running daemon.
-    SuggestAccept {
-        /// Slot number 1..=3.
-        slot: u8,
-    },
-    /// Add the flagged word to the personal dictionary.
-    SuggestLearn,
-    /// Dismiss the current suggestions.
-    SuggestDismiss,
-    /// Terminal fallback: print suggestions as they appear (no GUI window).
-    SuggestBar,
 }
 
 #[tokio::main]
@@ -178,217 +157,12 @@ async fn main() -> anyhow::Result<()> {
             }
             println!("\nself-test OK — hotkey interception works");
         }
-        Command::Spell { text } => {
-            let input = match text {
-                Some(t) => t,
-                None => {
-                    use std::io::Read;
-                    let mut s = String::new();
-                    std::io::stdin().read_to_string(&mut s)?;
-                    s.trim_end_matches('\n').to_string()
-                }
-            };
-            run_spell_cli(&input);
-        }
-        Command::SuggestPeek => {
-            // Combined status for the Plasma widget: daemon liveness + tips.
-            let hb = switchfix_adapters::read_daemon_heartbeat();
-            let daemon_alive = hb.is_some();
-            let sug = std::fs::read_to_string(switchfix_adapters::suggest_state_path())
-                .ok()
-                .and_then(|j| serde_json::from_str::<switchfix_app::ports::SuggestionUi>(&j).ok());
-            let spell_st = switchfix_app::read_spell_status();
-            let json = serde_json::json!({
-                "daemon": daemon_alive,
-                "enabled": hb.map(|h| h.enabled).unwrap_or(false),
-                "original": sug.as_ref().map(|s| s.original.clone()).unwrap_or_default(),
-                "slots": sug.as_ref().map(|s| s.slots.clone()).unwrap_or_default(),
-                "can_add_to_dict": sug.as_ref().map(|s| s.can_add_to_dict).unwrap_or(false),
-                "timeout_ms": sug.as_ref().map(|s| s.timeout_ms).unwrap_or(0),
-                // LLM / hybrid diagnostics for the widget + `spell-stats`.
-                // `busy` is ignored when the daemon is gone (stale flag after a crash).
-                "llm": spell_st.as_ref().map(|s| serde_json::json!({
-                    "configured": s.llm_configured,
-                    "name": s.llm_name,
-                    "ok": s.llm_ok,
-                    "busy": daemon_alive && s.llm_busy,
-                    "calls": s.llm_calls,
-                    "errors": s.llm_errors,
-                    "last_ms": s.llm_last_ms,
-                })).unwrap_or(serde_json::json!({ "configured": false, "name": "", "ok": null, "busy": false })),
-                "stats": spell_st.as_ref().map(|s| serde_json::json!({
-                    "replaced": s.replaced,
-                    "undone": s.undone,
-                    "hints": s.hints,
-                    "vetoes": s.vetoes,
-                    "via": {
-                        "layout": s.via_layout,
-                        "dict": s.via_dict,
-                        "edit1": s.via_edit1,
-                        "context": s.via_context,
-                    },
-                    "history": s.history,
-                })).unwrap_or(serde_json::json!({})),
-            });
-            println!("{json}");
-        }
-        Command::SpellStats => {
-            let st = switchfix_app::read_spell_status();
-            match st {
-                Some(s) => {
-                    let json = serde_json::json!({
-                        "llm": {
-                            "configured": s.llm_configured,
-                            "name": s.llm_name,
-                            "ok": s.llm_ok,
-                            "busy": s.llm_busy,
-                            "calls": s.llm_calls,
-                            "errors": s.llm_errors,
-                            "last_ms": s.llm_last_ms,
-                        },
-                        "stats": {
-                            "replaced": s.replaced,
-                            "undone": s.undone,
-                            "hints": s.hints,
-                            "vetoes": s.vetoes,
-                            "via_layout": s.via_layout,
-                            "via_dict": s.via_dict,
-                            "via_edit1": s.via_edit1,
-                            "via_context": s.via_context,
-                        },
-                        "history": s.history,
-                        "history_log": switchfix_app::spell_history_path(),
-                    });
-                    println!("{}", serde_json::to_string_pretty(&json)?);
-                }
-                None => {
-                    eprintln!("no spell status yet (daemon not running or no words checked)");
-                    println!("{{}}");
-                }
-            }
-        }
-        Command::SuggestAccept { slot } => {
-            write_suggest_cmd(&format!("accept:{slot}")).await;
-        }
-        Command::SuggestLearn => {
-            write_suggest_cmd("add").await;
-        }
-        Command::SuggestDismiss => {
-            write_suggest_cmd("dismiss").await;
-        }
-        Command::SuggestBar => {
-            switchfix_ui::run_suggest_bar();
-        }
         Command::Daemon => {
             run_daemon().await?;
         }
     }
 
     Ok(())
-}
-
-/// Queue a command for the running daemon (file IPC).
-async fn write_suggest_cmd(cmd: &str) {
-    let path = switchfix_adapters::suggest_cmd_path();
-    if let Err(e) = std::fs::write(&path, cmd) {
-        eprintln!("cannot write {}: {e}", path.display());
-        std::process::exit(1);
-    }
-    // Give the daemon a moment to pick the command up.
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    println!("ok: {cmd}");
-}
-
-/// `switchfix spell --text …` — dictionary lookup without injection.
-fn run_spell_cli(input: &str) {
-    use switchfix_app::ports::SpellChecker;
-    use switchfix_domain::{detect_lang, rank, should_check, Suggestion, SuggestionKind};
-
-    let store = switchfix_adapters::TomlConfigStore::open_default();
-    let cfg = switchfix_adapters::ensure_config(&store);
-    let user_dic = dirs::data_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("switchfix")
-        .join("user.dic");
-    let dict = switchfix_adapters::ZspellDictionary::load(&cfg.spell.languages, user_dic);
-    if !dict.has_any() {
-        eprintln!("no spell dictionaries found (install hunspell-ru / hunspell-en-us)");
-        std::process::exit(2);
-    }
-
-    let word = input.trim();
-    if word.is_empty() {
-        eprintln!("empty input");
-        std::process::exit(2);
-    }
-
-    let Some(lang) = detect_lang(word) else {
-        println!("(no letters — nothing to check)");
-        return;
-    };
-    println!("word: {word}  lang: {lang}");
-
-    if !should_check(word, cfg.spell.min_word_len) {
-        println!("skipped (noise / too short / acronym)");
-        return;
-    }
-
-    if dict.is_correct(word, lang) {
-        println!("correct ✓");
-        return;
-    }
-    println!("misspelled ✗");
-
-    let mut candidates: Vec<Suggestion> = Vec::new();
-    if let Ok(conv) = switchfix_domain::convert(
-        word,
-        &switchfix_domain::ConversionSet::en_ru(),
-        None,
-        None,
-    ) {
-        if let Some(cl) = detect_lang(&conv.converted) {
-            if dict.is_correct(&conv.converted, cl) {
-                candidates.push(Suggestion::new(
-                    conv.converted,
-                    SuggestionKind::LayoutConvert,
-                    word,
-                ));
-            }
-        }
-    }
-    for c in dict.suggest(word, lang, 8) {
-        candidates.push(
-            Suggestion::new(c, SuggestionKind::SpellFix, word).with_via("dict"),
-        );
-    }
-    // Full edit-1 neighborhood (insert/delete/replace/transpose) — same as
-    // the live SpellService. Cheap one-step neighbors miss insertions
-    // (`ачала` → `начала`).
-    for cand in switchfix_domain::edit1_neighbors(word) {
-        if candidates.iter().any(|s| s.text == cand) {
-            continue;
-        }
-        if let Some(cl) = detect_lang(&cand) {
-            if dict.is_correct(&cand, cl) {
-                candidates.push(
-                    Suggestion::new(cand, SuggestionKind::SpellFix, word).with_via("edit1"),
-                );
-            }
-        }
-    }
-    let ranked = rank(word, candidates);
-    if ranked.is_empty() {
-        println!("no suggestions");
-        return;
-    }
-    for (i, s) in ranked.iter().take(cfg.spell.suggest_count).enumerate() {
-        let kind = match s.kind {
-            SuggestionKind::LayoutConvert => " (раскладка)",
-            SuggestionKind::SpellFix => "",
-            SuggestionKind::Completion => " (дописывание)",
-        };
-        println!("{}. {}{kind}", i + 1, s.text);
-    }
 }
 
 async fn run_daemon() -> anyhow::Result<()> {
@@ -420,7 +194,6 @@ async fn run_daemon() -> anyhow::Result<()> {
     wiring::spawn_tray_dispatcher(
         cmd_rx,
         ctx.service.clone(),
-        ctx.spell.clone(),
         on_settings,
         on_quit,
     );
@@ -428,55 +201,26 @@ async fn run_daemon() -> anyhow::Result<()> {
     // Hotkey loop
     let mut events = ctx.hotkeys.events();
     let service = ctx.service.clone();
-    let spell = ctx.spell.clone();
     let buffer = ctx.buffer.clone();
 
-    // Spell word-event loop: completions + auto-fix + hints as the user types.
-    let sound_cfg = ctx.config_rx.clone();
-    let tray_refresh = {
-        // Best-effort: keep the tray menu in sync with current suggestions.
-        let model = tray_model.clone();
-        std::sync::Arc::new(move || {
-            let path = switchfix_adapters::suggest_state_path();
-            match std::fs::read_to_string(&path)
-                .ok()
-                .and_then(|j| serde_json::from_str::<switchfix_app::ports::SuggestionUi>(&j).ok())
-            {
-                Some(ui) => {
-                    let slots: Vec<String> = ui
-                        .slots
-                        .iter()
-                        .map(|s| s.text.clone())
-                        .collect();
-                    model.set_suggestions(&ui.original, &slots, ui.can_add_to_dict);
-                }
-                None => model.clear_suggestions(),
-            }
-        })
-    };
-    if let Some(spell_svc) = spell.clone() {
+    // Word events → LLM undo (Backspace) + cancel-on-typing.
+    {
         let mut word_rx = buffer.word_events();
-        let tray_refresh = tray_refresh.clone();
+        let svc = service.clone();
         tokio::spawn(async move {
+            use switchfix_app::ports::WordEvent;
             while let Ok(ev) = word_rx.recv().await {
-                let action = spell_svc.on_word_event(ev).await;
-                tray_refresh();
-                if matches!(
-                    action,
-                    switchfix_app::services::SpellAction::Replaced { .. }
-                        | switchfix_app::services::SpellAction::Undone { .. }
-                ) && sound_cfg.borrow().spell.sound
-                {
-                    switchfix_ui::play_fix_sound();
+                match ev {
+                    WordEvent::Backspace => {
+                        if svc.on_backspace().await {
+                            switchfix_ui::play_fix_sound();
+                        }
+                    }
+                    WordEvent::Updated(_) => svc.on_typing(),
+                    WordEvent::Completed { .. } => {}
                 }
             }
         });
-    }
-
-    // Suggestion UI: Plasma panel widget (org.switchfix.suggestions) and/or
-    // tray menu + Ctrl+1/2/3. No floating window (it covered other apps).
-    if spell.is_some() {
-        info!("suggestions ready (plasmoid / tray menu / Ctrl+1..N)");
     }
 
     // Also poll the toggle state file for `switchfix toggle`.
@@ -487,7 +231,6 @@ async fn run_daemon() -> anyhow::Result<()> {
     // Settings "Сохранить" signals a full restart so hotkeys rebind (re-exec).
     let restart_path = std::env::temp_dir().join("switchfix.restart");
     let last_restart = std::fs::read_to_string(&restart_path).unwrap_or_default();
-    let suggest_cmd_path = switchfix_adapters::platform::portable::suggest_cmd_path();
     switchfix_adapters::write_daemon_heartbeat(service.is_enabled());
 
     let mut restart_requested = false;
@@ -525,55 +268,7 @@ async fn run_daemon() -> anyhow::Result<()> {
                             }
                             HotkeyEvent::ToggleEnabled => {
                                 service.toggle_enabled().await;
-                                if let Some(s) = &spell {
-                                    s.set_enabled(service.is_enabled());
-                                }
                                 switchfix_adapters::write_daemon_heartbeat(service.is_enabled());
-                            }
-                            HotkeyEvent::FixSpelling => {
-                                if let Some(s) = &spell {
-                                    let action = s.fix_last_word().await;
-                                    info!("spell fix: {action:?}");
-                                    tray_refresh();
-                                    tray_handle.refresh();
-                                    if matches!(
-                                        action,
-                                        switchfix_app::services::SpellAction::Replaced { .. }
-                                    ) && ctx.config_rx.borrow().spell.sound
-                                    {
-                                        switchfix_ui::play_fix_sound();
-                                    }
-                                }
-                            }
-                            HotkeyEvent::AcceptSuggestion(n) => {
-                                if let Some(s) = &spell {
-                                    let action = s.accept_slot(n).await;
-                                    info!("spell accept {n}: {action:?}");
-                                    tray_refresh();
-                                    tray_handle.refresh();
-                                    if matches!(
-                                        action,
-                                        switchfix_app::services::SpellAction::Replaced { .. }
-                                    ) && ctx.config_rx.borrow().spell.sound
-                                    {
-                                        switchfix_ui::play_fix_sound();
-                                    }
-                                }
-                            }
-                            HotkeyEvent::AddToDictionary => {
-                                if let Some(s) = &spell {
-                                    let action = s.add_to_dictionary().await;
-                                    info!("spell learn: {action:?}");
-                                    tray_refresh();
-                                    tray_handle.refresh();
-                                }
-                            }
-                            HotkeyEvent::DismissSuggestions => {
-                                if let Some(s) = &spell {
-                                    s.dismiss().await;
-                                    tray_refresh();
-                                    tray_handle.refresh();
-                                }
                             }
                         }
                     }
@@ -589,9 +284,6 @@ async fn run_daemon() -> anyhow::Result<()> {
                     if v != last_toggle {
                         last_toggle = v;
                         service.toggle_enabled().await;
-                        if let Some(s) = &spell {
-                            s.set_enabled(service.is_enabled());
-                        }
                         switchfix_adapters::write_daemon_heartbeat(service.is_enabled());
                     }
                 }
@@ -601,16 +293,16 @@ async fn run_daemon() -> anyhow::Result<()> {
                         last_reload = token.clone();
                         match ctx.store.load() {
                             Ok(cfg) => {
+                                // Rebuild the OpenAI corrector so URL/token/prompt
+                                // changes apply without a full daemon restart.
+                                crate::wiring::install_text_corrector(&service, &cfg);
                                 ctx.config_tx.send_replace(cfg);
                                 info!("config reloaded from disk");
                             }
                             Err(e) => warn!("config reload failed, keeping previous: {e}"),
                         }
                         let tables = switchfix_adapters::load_conversion_set();
-                        service.replace_tables(tables.clone());
-                        if let Some(s) = &spell {
-                            s.replace_tables(tables);
-                        }
+                        service.replace_tables(tables);
                         info!("layout maps reloaded (hotkeys need Settings «Сохранить» or a daemon restart)");
                     }
                 }
@@ -631,53 +323,6 @@ async fn run_daemon() -> anyhow::Result<()> {
                 if capturing {
                     // Drain any queued hotkeys so they don't fire after capture.
                     while events.try_recv().is_ok() {}
-                }
-
-                // Suggestion-bar click commands (accept:N / add / dismiss).
-                if let Ok(cmd) = std::fs::read_to_string(&suggest_cmd_path) {
-                    let _ = std::fs::remove_file(&suggest_cmd_path);
-                    let cmd = cmd.trim().to_string();
-                    if let Some(s) = &spell {
-                        let action = if let Some(rest) = cmd.strip_prefix("accept:") {
-                            match rest.trim().parse::<u8>() {
-                                Ok(n) => s.accept_slot(n).await,
-                                Err(_) => switchfix_app::services::SpellAction::None,
-                            }
-                        } else if cmd == "add" {
-                            s.add_to_dictionary().await
-                        } else if cmd == "dismiss" {
-                            s.dismiss().await
-                        } else {
-                            switchfix_app::services::SpellAction::None
-                        };
-                        info!("suggest-bar cmd {cmd:?}: {action:?}");
-                        tray_refresh();
-                        tray_handle.refresh();
-                        if matches!(
-                            action,
-                            switchfix_app::services::SpellAction::Replaced { .. }
-                        ) && ctx.config_rx.borrow().spell.sound
-                        {
-                            switchfix_ui::play_fix_sound();
-                        }
-                    }
-                }
-
-                // Auto-hide tips after bar_timeout_ms so they don't stick forever.
-                if let Some(s) = &spell {
-                    let timeout = ctx.config_rx.borrow().spell.bar_timeout_ms;
-                    if timeout > 0 {
-                        let path = switchfix_adapters::suggest_state_path();
-                        let expired = std::fs::metadata(&path).ok().and_then(|m| {
-                            m.modified().ok().and_then(|t| t.elapsed().ok())
-                        }).map(|age| age.as_millis() as u64 >= timeout).unwrap_or(false);
-                        if expired {
-                            debug!("suggestion bar timeout ({timeout} ms) — hide");
-                            s.dismiss().await;
-                            tray_refresh();
-                            tray_handle.refresh();
-                        }
-                    }
                 }
             }
         }

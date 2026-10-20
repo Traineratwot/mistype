@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use switchfix_domain::{
     convert, ConversionSet, CorrectionOutcome, CorrectionRequest, CorrectionState, KeyChord,
@@ -13,9 +13,19 @@ use tracing::{debug, warn};
 
 use crate::config::AppConfig;
 use crate::ports::{
-    CapturedSelection, ClipboardPort, ContextCorrector, FocusMonitor, LayoutSwitcher, Notifier,
-    NotifyLevel, SavedClipboard, SelectionCapture, TextInjector, TypingBufferPort,
+    CapturedSelection, ClipboardPort, FocusMonitor, LayoutSwitcher, Notifier, NotifyLevel,
+    SavedClipboard, SelectionCapture, TextCorrector, TextInjector, TypingBufferPort,
 };
+
+/// Undo target after an LLM selection replace (Backspace rolls it back).
+struct UndoState {
+    original: String,
+    replacement: String,
+    when: Instant,
+}
+
+/// How long Backspace still means "undo last LLM replace".
+const UNDO_WINDOW: Duration = Duration::from_secs(4);
 
 /// Orchestrates capture → convert → replace → switch-layout.
 pub struct CorrectionService {
@@ -26,8 +36,12 @@ pub struct CorrectionService {
     layouts: Arc<dyn LayoutSwitcher>,
     notifier: Arc<dyn Notifier>,
     focus: Option<Arc<dyn FocusMonitor>>,
-    /// Optional hybrid backend for the «LLM-fix selection» hotkey.
-    context: std::sync::Mutex<Option<Arc<dyn ContextCorrector>>>,
+    /// External OpenAI-compatible corrector for «LLM-fix selection».
+    text_corrector: std::sync::Mutex<Option<Arc<dyn TextCorrector>>>,
+    /// Set after an LLM replace so the next Backspace undoes it.
+    undo: std::sync::Mutex<Option<UndoState>>,
+    /// Skip undo while WE inject backspaces / type_text.
+    suppress: AtomicBool,
     tables: std::sync::RwLock<ConversionSet>,
     config: watch::Receiver<AppConfig>,
     enabled: AtomicBool,
@@ -82,7 +96,9 @@ impl CorrectionService {
             layouts,
             notifier,
             focus,
-            context: std::sync::Mutex::new(None),
+            text_corrector: std::sync::Mutex::new(None),
+            undo: std::sync::Mutex::new(None),
+            suppress: AtomicBool::new(false),
             tables: std::sync::RwLock::new(tables),
             config,
             enabled: AtomicBool::new(enabled),
@@ -90,9 +106,9 @@ impl CorrectionService {
         }
     }
 
-    /// Install the hybrid context backend used by `LlmFixSelection`.
-    pub fn set_context_corrector(&self, ctx: Arc<dyn ContextCorrector>) {
-        *self.context.lock().unwrap() = Some(ctx);
+    /// Install the external OpenAI-compatible corrector.
+    pub fn set_text_corrector(&self, ctx: Arc<dyn TextCorrector>) {
+        *self.text_corrector.lock().unwrap() = Some(ctx);
     }
 
     /// Swap conversion tables at runtime (config reload).
@@ -117,6 +133,7 @@ impl CorrectionService {
         self.enabled.store(now, Ordering::SeqCst);
         if !now {
             self.buffer.clear();
+            self.clear_undo();
         }
         let msg = if now {
             "SwitchFix: включён"
@@ -131,6 +148,7 @@ impl CorrectionService {
         self.enabled.store(on, Ordering::SeqCst);
         if !on {
             self.buffer.clear();
+            self.clear_undo();
         }
     }
 
@@ -230,24 +248,25 @@ impl CorrectionService {
     }
 
     /// `LlmFixSelection` hotkey: capture the selection, send the whole text
-    /// to the context backend (LLM), replace the selection with the result.
+    /// to the external LLM, replace the selection with the result.
     /// Explicit action only — never part of auto-replace.
     async fn llm_fix_selection(&self) -> CorrectionOutcome {
         let cfg = self.cfg();
-        if !cfg.spell.llm_selection {
+        if !cfg.llm.enabled {
             debug!("llm_fix_selection: feature disabled in settings");
             return CorrectionOutcome::Disabled;
         }
-        let Some(ctx) = self.context.lock().unwrap().clone() else {
-            warn!("llm_fix_selection: no context backend (set llm_cmd / lt_url)");
+        let tc_opt = self.text_corrector.lock().unwrap().clone();
+        let Some(tc) = tc_opt else {
+            warn!("llm_fix_selection: no text corrector (set llm.base_url)");
             let _ = self
                 .notifier
                 .notify(
-                    "LLM-исправление недоступно: не настроен llm_cmd или lt_url",
+                    "LLM-исправление недоступно: не настроен llm.base_url",
                     NotifyLevel::Warning,
                 )
                 .await;
-            return CorrectionOutcome::Failed("no context backend".into());
+            return CorrectionOutcome::Failed("no text corrector".into());
         };
 
         let captured = match self.selection.capture_selection().await {
@@ -265,11 +284,8 @@ impl CorrectionService {
             return CorrectionOutcome::NoInputFound;
         }
 
-        // Guess language from the majority script of the selection.
-        let lang = switchfix_domain::detect_lang(&text).unwrap_or("ru");
-
         let _ = self.state_tx.send(CorrectionState::Capturing);
-        let corrected = match ctx.correct_text(&text, lang).await {
+        let corrected = match tc.correct_text(&text).await {
             Ok(t) => t,
             Err(e) => {
                 warn!("llm correct_text failed: {e}");
@@ -293,15 +309,18 @@ impl CorrectionService {
             return CorrectionOutcome::NoInputFound;
         }
 
-        self.replace_with_text(captured, text, corrected).await
+        self.replace_with_text(captured, text, corrected, true).await
     }
 
     /// Paste `new_text` over the captured selection (no layout convert).
+    /// When `arm_undo` is set, one Backspace within [`UNDO_WINDOW`] restores
+    /// `original` (the «LLM-fix selection» path).
     async fn replace_with_text(
         &self,
         captured: CapturedSelection,
         original: String,
         new_text: String,
+        arm_undo: bool,
     ) -> CorrectionOutcome {
         let cfg = self.cfg();
         let CapturedSelection { saved, .. } = captured;
@@ -336,11 +355,88 @@ impl CorrectionService {
         tokio::time::sleep(Duration::from_millis(cfg.behavior.paste_settle_ms)).await;
         self.restore_clipboard(saved, &cfg).await;
 
+        if arm_undo {
+            self.buffer.set_contents(&new_text);
+            *self.undo.lock().unwrap() = Some(UndoState {
+                original: original.clone(),
+                replacement: new_text.clone(),
+                when: Instant::now(),
+            });
+            debug!("llm undo armed (window {:?})", UNDO_WINDOW);
+        }
+
         CorrectionOutcome::Converted {
             original,
             converted: new_text,
             layout_switched_to: None,
         }
+    }
+
+    /// Physical Backspace: roll back a recent LLM selection replace.
+    ///
+    /// One Backspace = undo the whole replacement (original restored).
+    /// Returns `true` when an undo was performed.
+    pub async fn on_backspace(&self) -> bool {
+        if self.suppress.load(Ordering::SeqCst) {
+            return false;
+        }
+        let undo = {
+            let mut g = self.undo.lock().unwrap();
+            match g.as_ref() {
+                Some(u) if u.when.elapsed() <= UNDO_WINDOW => g.take().unwrap(),
+                Some(_) => {
+                    *g = None;
+                    return false;
+                }
+                None => return false,
+            }
+        };
+        // Physical Backspace already deleted one character of the replacement.
+        let typed = undo.replacement.chars().count();
+        let already = 1usize.min(typed);
+        let remaining = typed - already;
+
+        self.suppress.store(true, Ordering::SeqCst);
+        self.buffer.wait_keys_quiet(50, 500).await;
+
+        if remaining > 0 {
+            if let Err(e) = self.injector.backspace(remaining).await {
+                warn!("llm undo failed (backspace {remaining}): {e}");
+                self.suppress.store(false, Ordering::SeqCst);
+                return false;
+            }
+        }
+        let layout = LayoutId::new(match switchfix_domain::detect_lang(&undo.original) {
+            Some("ru") => "ru",
+            _ => "us",
+        });
+        if let Err(e) = self.injector.type_text(&undo.original, &layout).await {
+            warn!("llm undo failed (type {:?}): {e}", undo.original);
+            self.suppress.store(false, Ordering::SeqCst);
+            return false;
+        }
+
+        self.buffer.set_contents(&undo.original);
+        self.suppress.store(false, Ordering::SeqCst);
+        debug!(restored = undo.original, "llm undo (backspace after LLM replace)");
+        true
+    }
+
+    /// The user typed something else — cancel a pending LLM undo.
+    pub fn on_typing(&self) {
+        if self.suppress.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut g = self.undo.lock().unwrap();
+        if g.is_some() {
+            debug!("llm undo cancelled (user typed)");
+            *g = None;
+        }
+    }
+
+    /// Clear any pending undo (e.g. on toggle-off).
+    pub fn clear_undo(&self) {
+        *self.undo.lock().unwrap() = None;
     }
 
     async fn convert_terminal(&self) -> CorrectionOutcome {
@@ -836,28 +932,16 @@ mod tests {
         assert!(log.iter().any(|l| l.contains("CtrlShiftV")), "log={log:?}");
     }
 
-    struct FakeCtx {
+    struct FakeTextCorrector {
         fixed: String,
     }
 
     #[async_trait]
-    impl ContextCorrector for FakeCtx {
+    impl TextCorrector for FakeTextCorrector {
         fn name(&self) -> &'static str {
-            "fake-llm"
+            "fake-openai"
         }
-        async fn correct(
-            &self,
-            _word: &str,
-            _context: &str,
-            _lang: &str,
-        ) -> Result<Vec<crate::ports::ContextFix>, crate::ports::SpellError> {
-            Ok(vec![])
-        }
-        async fn correct_text(
-            &self,
-            _text: &str,
-            _lang: &str,
-        ) -> Result<String, crate::ports::SpellError> {
+        async fn correct_text(&self, _text: &str) -> Result<String, TextFixError> {
             Ok(self.fixed.clone())
         }
     }
@@ -865,7 +949,7 @@ mod tests {
     #[tokio::test]
     async fn llm_fix_selection_replaces_with_corrected_text() {
         let (svc, inj, clip, _b) = service(Some("он ачала говорить".into()), None, false, true);
-        svc.set_context_corrector(Arc::new(FakeCtx {
+        svc.set_text_corrector(Arc::new(FakeTextCorrector {
             fixed: "он начал говорить".into(),
         }));
         let out = svc.handle(CorrectionRequest::LlmFixSelection).await;
@@ -891,7 +975,7 @@ mod tests {
     #[tokio::test]
     async fn llm_fix_selection_no_changes_is_noop() {
         let (svc, _i, _c, _b) = service(Some("уже хорошо".into()), None, false, true);
-        svc.set_context_corrector(Arc::new(FakeCtx {
+        svc.set_text_corrector(Arc::new(FakeTextCorrector {
             fixed: "уже хорошо".into(),
         }));
         let out = svc.handle(CorrectionRequest::LlmFixSelection).await;
@@ -910,7 +994,7 @@ mod tests {
         let notifier = Arc::new(FakeNotifier::default());
         let (_tx, rx) = watch::channel({
             let mut c = AppConfig::default();
-            c.spell.llm_selection = false;
+            c.llm.enabled = false;
             c
         });
         let svc = CorrectionService::new(
@@ -924,10 +1008,76 @@ mod tests {
             rx,
             true,
         );
-        svc.set_context_corrector(Arc::new(FakeCtx {
+        svc.set_text_corrector(Arc::new(FakeTextCorrector {
             fixed: "другое".into(),
         }));
         let out = svc.handle(CorrectionRequest::LlmFixSelection).await;
         assert_eq!(out, CorrectionOutcome::Disabled);
+    }
+
+    #[tokio::test]
+    async fn llm_undo_restores_original_on_backspace() {
+        let (svc, inj, _clip, _b) = service(Some("он ачала".into()), None, false, true);
+        svc.set_text_corrector(Arc::new(FakeTextCorrector {
+            fixed: "он начал".into(),
+        }));
+        let out = svc.handle(CorrectionRequest::LlmFixSelection).await;
+        assert!(out.is_success(), "{out:?}");
+        inj.log.lock().unwrap().clear();
+
+        assert!(svc.on_backspace().await, "backspace must undo");
+        let log = inj.log.lock().unwrap().clone();
+        // replacement "он начал" = 8 chars; physical BS ate 1 → backspace(7).
+        assert!(log.iter().any(|l| l == "bs:7"), "log={log:?}");
+        assert!(
+            log.iter().any(|l| l.starts_with("type:он ачала")),
+            "log={log:?}"
+        );
+        // Second backspace is a plain delete (undo already consumed).
+        inj.log.lock().unwrap().clear();
+        assert!(!svc.on_backspace().await);
+        assert!(inj.log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn llm_undo_expired_window_is_noop() {
+        let (svc, inj, _clip, _b) = service(Some("он ачала".into()), None, false, true);
+        svc.set_text_corrector(Arc::new(FakeTextCorrector {
+            fixed: "он начал".into(),
+        }));
+        let _ = svc.handle(CorrectionRequest::LlmFixSelection).await;
+        // Expire the window artificially.
+        {
+            let mut g = svc.undo.lock().unwrap();
+            if let Some(u) = g.as_mut() {
+                u.when = Instant::now() - Duration::from_secs(10);
+            }
+        }
+        inj.log.lock().unwrap().clear();
+        assert!(!svc.on_backspace().await);
+        assert!(inj.log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn llm_undo_cleared_by_typing() {
+        let (svc, inj, _clip, _b) = service(Some("он ачала".into()), None, false, true);
+        svc.set_text_corrector(Arc::new(FakeTextCorrector {
+            fixed: "он начал".into(),
+        }));
+        let _ = svc.handle(CorrectionRequest::LlmFixSelection).await;
+        svc.on_typing();
+        inj.log.lock().unwrap().clear();
+        assert!(!svc.on_backspace().await);
+        assert!(inj.log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn llm_undo_not_armed_for_convert() {
+        let (svc, inj, _clip, _b) = service(Some("ghbdtn".into()), None, false, true);
+        let out = svc.handle(CorrectionRequest::ConvertSelection).await;
+        assert!(out.is_success(), "{out:?}");
+        inj.log.lock().unwrap().clear();
+        assert!(!svc.on_backspace().await);
+        assert!(inj.log.lock().unwrap().is_empty());
     }
 }

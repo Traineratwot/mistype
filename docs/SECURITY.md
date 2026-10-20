@@ -11,10 +11,11 @@ against: a compromised kernel or a root attacker.
 
 | Capability | Why | Risk | Mitigation |
 |------------|-----|------|------------|
-| `input` group | Read `/dev/input/event*` (hotkeys, keystroke buffer), open `/dev/uinput` (inject keys) | Any process in `input` can keylog or inject | Documented; drop the group and use portal fallback if unacceptable; buffer is RAM-only and opt-out |
-| Session D-Bus | `org.kde.KeyboardLayouts` — get/set layout | Minimal (layout index only) | No other bus names claimed in MVP |
+| `input` group | Read `/dev/input/event*` (hotkeys, keystroke buffer), open `/dev/uinput` (inject keys) | Any process in `input` can keylog or inject | Documented; buffer is RAM-only and opt-out |
+| Session D-Bus | `org.kde.KeyboardLayouts` — get/set layout | Minimal (layout index only) | No other bus names claimed |
 | Clipboard | Save/put/get/restore around a conversion | Transient exposure of one selection | Marker protocol + best-effort restore; no persistence |
-| systemd user sandbox | Limits blast radius of a compromised binary | — | `ProtectSystem=strict`, `ProtectHome=read-only`, `NoNewPrivileges`, `RestrictAddressFamilies=AF_UNIX AF_NETLINK`, `DevicePolicy=closed` + explicit `/dev/input` + `/dev/uinput` |
+| Outbound HTTP(S) (optional) | «LLM-fix selection» to your configured OpenAI-compatible API | Selected text leaves the machine | Off unless `llm.base_url` is set; only the selection + system prompt are sent; token never logged |
+| systemd user sandbox | Limits blast radius of a compromised binary | — | `ProtectSystem=strict`, `ProtectHome=read-only`, `NoNewPrivileges`, `RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6`, `DevicePolicy=closed` + explicit `/dev/input` + `/dev/uinput` |
 
 ## Known limitations
 
@@ -41,9 +42,9 @@ against: a compromised kernel or a root attacker.
 
 - `privacy.typing_buffer = true` but RAM-only, max 256 keys, cleared on pause/exit.
 - `privacy.log_text_content = false` — logs never contain typed text.
-- `hotkeys.use_portal_hotkeys = false` — hotkeys work offline; portal is opt-in.
-- Service runs with a restrictive systemd sandbox.
-- No network, no telemetry, no auto-update.
+- `llm.base_url` empty — no network until you configure an endpoint.
+- Service runs with a restrictive systemd sandbox (`AF_INET`/`AF_INET6` only for the optional LLM API).
+- No telemetry, no auto-update. API token is stored in `config.toml` (recommend `chmod 600`).
 
 ## Reporting
 

@@ -187,8 +187,6 @@ struct Binding {
     parsed: HotkeyBinding,
     code: KeyCode,
     event: HotkeyEvent,
-    /// Only matched while the suggestion bar is visible (Ctrl+1..N accept).
-    dynamic: bool,
 }
 
 /// Passive / consuming evdev listener.
@@ -199,10 +197,6 @@ pub struct EvdevHotkeySource {
 /// Options for the evdev hotkey source.
 pub struct EvdevOptions {
     pub bindings: Vec<(HotkeyBinding, HotkeyEvent)>,
-    /// Bindings only matched while `bar_visible` is true (accept chords).
-    pub dynamic_bindings: Vec<(HotkeyBinding, HotkeyEvent)>,
-    /// Shared flag set while the suggestion bar is on screen.
-    pub bar_visible: Arc<std::sync::atomic::AtomicBool>,
     /// EVIOCGRAB + uinput pass-through so the hotkey does not reach apps.
     pub consume: bool,
     /// Typing buffer (for last-word mode).
@@ -225,8 +219,6 @@ impl EvdevHotkeySource {
         ];
         Self::open_with(EvdevOptions {
             bindings: defaults,
-            dynamic_bindings: Vec::new(),
-            bar_visible: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             consume: false,
             buffer,
             mapper: Arc::new(LayoutCharMapper::us_only()),
@@ -248,34 +240,11 @@ impl EvdevHotkeySource {
                         parsed,
                         code,
                         event,
-                        dynamic: false,
                     })
                 }
                 None => {
                     warn!(
                         "hotkey key '{key}' has no evdev code — skipped",
-                        key = parsed.key
-                    );
-                }
-            }
-        }
-        for (parsed, event) in opts.dynamic_bindings {
-            match key_name_to_code(&parsed.key) {
-                Some(code) => {
-                    debug!(
-                        "compiled dynamic binding key='{}' -> {:?}",
-                        parsed.key, event
-                    );
-                    compiled.push(Binding {
-                        parsed,
-                        code,
-                        event,
-                        dynamic: true,
-                    })
-                }
-                None => {
-                    warn!(
-                        "dynamic hotkey key '{key}' has no evdev code — skipped",
                         key = parsed.key
                     );
                 }
@@ -350,7 +319,6 @@ impl EvdevHotkeySource {
         );
 
         let buffer = opts.buffer;
-        let bar_visible = opts.bar_visible;
         let mapper = opts.mapper;
         std::thread::spawn(move || {
             run_loop(
@@ -360,7 +328,6 @@ impl EvdevHotkeySource {
                 tx,
                 passthrough,
                 consume,
-                bar_visible,
                 mapper,
             );
         });
@@ -414,10 +381,8 @@ fn run_loop(
     tx: mpsc::Sender<HotkeyEvent>,
     passthrough: Option<Passthrough>,
     consume: bool,
-    bar_visible: Arc<std::sync::atomic::AtomicBool>,
     mapper: Arc<LayoutCharMapper>,
 ) {
-    use std::sync::atomic::Ordering;
     // When consuming, we must re-inject everything that is not a hotkey.
     let consuming = consume && passthrough.is_some();
 
@@ -506,12 +471,9 @@ fn run_loop(
                 }
 
                 // Hotkey match on key-down (key-up/rep of the same key is swallowed
-                // too so the app never sees a half-press). Dynamic accept chords
-                // only match while the suggestion bar is visible.
-                let bar_on = bar_visible.load(Ordering::SeqCst);
+                // too so the app never sees a half-press).
                 let matched = bindings.iter().find(|b| {
-                    (!b.dynamic || bar_on)
-                        && b.code.0 == code
+                    b.code.0 == code
                         && b.parsed.ctrl == ctrl
                         && b.parsed.alt == alt
                         && b.parsed.shift == shift
@@ -537,7 +499,7 @@ fn run_loop(
                         buffer.push(mapper.map_char(latin));
                     }
                 }
-                // Track held keys so spell can wait for release before inject.
+                // Track held keys so injection can wait for release first.
                 match value {
                     1 => buffer.note_key_down(),
                     0 => buffer.note_key_up(),

@@ -38,9 +38,11 @@ Tray-утилита для **Kubuntu (Debian + KDE Plasma 6, Wayland-only MVP)**
 | **kanata / keyd / kmonad** | Rust/C/HS | Low-level remap | Слишком низко; паттерны evdev |
 | **im-select** | C++ | CLI switch IME | Маленький helper |
 
-### Спеллинг (фаза 2)
+### Спеллинг (фаза 2) — **removed from scope**
 
-**zspell** (pure Rust, Hunspell-формат) · системные словари `/usr/share/hunspell` · user.dic · one-step neighbors для очевидных опечаток · LanguageTool (опц., тяжёлый) · aspell (legacy)
+~~zspell · hunspell-словари · user.dic · LanguageTool~~ — выпилено из продукта
+(см. «LLM-fix selection» ниже). В domain остался только `detect_lang`
+(`domain/lang.rs`).
 
 ### Выводы
 
@@ -64,7 +66,7 @@ Tray-утилита для **Kubuntu (Debian + KDE Plasma 6, Wayland-only MVP)**
 | Inject | **uinput** (`evdev` crate) | Ядерная vkeyboard, не блокируется Wayland | wtype/ydotool/XTest |
 | Clipboard | `wl-clipboard-rs` (+ `arboard`) | save/put/get/restore | — |
 | Конфиг | `serde`+`toml` `~/.config/switchfix/` | Человекочитаемо | KConfig |
-| Спеллинг (P2) | **zspell** (pure Rust, hunspell-формат) | Без FFI, легко паковать | LanguageTool, hunspell FFI |
+| Спеллинг (P2) | ~~zspell~~ **removed from scope** | — заменено внешним LLM API (`[llm]`) | LanguageTool, hunspell FFI |
 | Упаковка | `.deb` + systemd user | Kubuntu-first | Flatpak (усложняет /dev) |
 
 **Паттерн процессов (снимает конфликт iced ↔ ksni):**
@@ -85,7 +87,7 @@ Tray-утилита для **Kubuntu (Debian + KDE Plasma 6, Wayland-only MVP)**
 | **evdev passive** | Полный контроль + keystroke-буфер | Группа `input` | ✅ **Primary** |
 | KDE KGlobalAccel D-Bus | Виден в System Settings | KDE-only, сложнее API | Fallback |
 
-**Дефолтные хоткеи:** `Ctrl+F1` selection · `Ctrl+Pause` toggle.
+**Дефолтные хоткеи:** `Ctrl+Alt+R` selection · `Alt+R` LLM-fix · `Ctrl+Alt+T` toggle.
 
 Pass-through (не consume) + settle-delay; опция `hotkey_consume` (EVIOCGRAB) — не дефолт.
 
@@ -283,7 +285,7 @@ SOLID: **S** — узкие модули · **O** — новые LayoutSwitcher/
 
 ## 6. Логика приложения
 
-### Convert selection (`Ctrl+F1`)
+### Convert selection (`Ctrl+Alt+R`)
 
 ```
 Capturing → enabled? → save clipboard → put(marker) → chord(Ctrl+Insert)
@@ -301,6 +303,19 @@ Capturing → enabled? → save clipboard → put(marker) → chord(Ctrl+Insert)
 
 **Removed** — selection-only convert. No Backspace fallback (it would wipe an
 active selection). Terminal apps use ConvertTerminal automatically.
+
+### LLM-fix selection (`alt+r`)
+
+Выделение целиком → внешний OpenAI-compatible API → замена выделения.
+Конфиг: `[llm]` (`base_url`, `api_token`, `system_prompt`, `model`,
+`timeout_ms`); пустой `base_url` = фича выключена. Клиент шлёт POST на
+`{base_url}/v1/chat/completions`. Пустое выделение — без сетевого вызова.
+
+После успешной замены **одна Backspace в течение ~4 с** полностью откатывает
+замену (восстанавливается оригинал); ввод любого другого символа отменяет undo.
+Undo работает даже при `privacy.typing_buffer=false` (событие
+`WordEvent::Backspace` не гейтится). См. `CorrectionService::{on_backspace,
+on_typing, clear_undo}` и `wiring::install_text_corrector`.
 
 ### Terminal (auto, no hotkey)
 
@@ -342,7 +357,7 @@ Idle → Capturing → Converting → Replacing → SwitchingLayout
 |------|-------|------|
 | **0 Spike** (1–2 дн.) | Подтвердить D-Bus `setLayout/getLayout`; uinput печатает в Kate; clipboard-marker читает selection; iced vs egui | Прототипы работают |
 | **1 MVP** (2–4 нед.) | domain EN↔RU, adapters, CorrectionService, tray, settings, CLI (`daemon\|settings\|convert\|doctor\|toggle`), .deb, tests | M1, M2, M6, M7 зелёные в 5 app |
-| **2 Spellcheck** | SpellPort + zspell, хоткей «исправить слово», полоса подсказок, completions, layout-convert candidates, user.dic, сигнал | unit + manual M15–M23 |
+| **2 Spellcheck** | **Removed from scope** (strip-down). Замена: «LLM-fix selection» (`[llm]` + Backspace-undo) | — |
 | **3 Snippets** | SnippetStore, expand по триггеру (keystroke-буфер), `{date}`/`{time}` | expand tests |
 | **4 Auto mode** | AutoDetector по словарям; default **off**; privacy | opt-in |
 | **5 Другие DE** | X11 (XTest/setxkbmap), GNOME (portal, gsettings), AUR/.rpm/Flatpak | adapter matrix |
@@ -357,7 +372,7 @@ Idle → Capturing → Converting → Replacing → SwitchingLayout
 
 **udev (опц.):** `KERNEL=="uinput", GROUP="input", MODE="0660"`.
 
-**systemd user unit:** `PartOf=graphical-session.target`, `Restart=on-failure`, `NoNewPrivileges`, `ProtectSystem=strict`, `RestrictAddressFamilies=AF_UNIX AF_NETLINK`.
+**systemd user unit:** `PartOf=graphical-session.target`, `Restart=on-failure`, `NoNewPrivileges`, `ProtectSystem=strict`, `RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6` (TCP — только для optional LLM API).
 
 **Dev:** `cargo build --release && cargo test && ./packaging/install.sh && switchfix doctor`.
 
@@ -368,7 +383,7 @@ Idle → Capturing → Converting → Replacing → SwitchingLayout
 | Принцип | Реализация |
 |---------|------------|
 | Не keylogger | Keystroke-буфер только в RAM (≤256), opt-in, drop на exit; **не** пишем текст в логи |
-| Локально | Нет сети/телеметрии; systemd sandbox |
+| Локально | Нет телеметрии; единственная сеть — user-configured `[llm] base_url` (см. «LLM-fix selection»); systemd sandbox |
 | Clipboard | save/restore best-effort; не-текстовый не восстанавливаем (doc) |
 | Password-поля | exclude list + эвристика; док «не жмите хоткей в паролях» |
 | Группа `input` | Документируем риск в SECURITY.md; альтернатива — portal (без буфера) |
@@ -483,15 +498,11 @@ typing_buffer = true
 typing_buffer_max_keys = 256
 log_text_content = false
 
-[spell]
+[llm]
 enabled = true
-mode = "hint"                  # off | hint | hotkey | auto
-languages = ["ru", "en"]
-min_word_len = 3
-completion_min_chars = 3
-suggest_count = 3
-bar_position = "bottom"
-bar_timeout_ms = 4500
-auto_fix_min_len = 4
-sound = true
+base_url = ""                    # OpenAI-compatible root; empty = off
+api_token = ""                   # Bearer; empty = no Authorization header
+system_prompt = "Исправь орфографию, грамматику и пунктуацию в тексте. Верни ТОЛЬКО исправленный текст без пояснений и без кавычек."
+model = ""                       # empty = omit model field
+timeout_ms = 15000               # 500..=120000
 ```

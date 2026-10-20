@@ -20,12 +20,6 @@ pub enum TrayCommand {
     LlmFixSelection,
     OpenSettings,
     Quit,
-    /// Accept a suggestion slot (1-based).
-    AcceptSuggestion(u8),
-    /// Add the flagged word to the personal dictionary.
-    LearnWord,
-    /// Dismiss current suggestions.
-    DismissSuggestions,
 }
 
 /// Shared state between daemon and tray.
@@ -36,8 +30,6 @@ pub struct TrayModel {
     /// On while the LLM is processing a selection (yellow blink).
     pub busy: AtomicBool,
     pub cmd_tx: mpsc::Sender<TrayCommand>,
-    /// Current suggestion slots (labels for the menu), empty when none.
-    suggestions: std::sync::Mutex<Option<(String, Vec<String>, bool)>>,
 }
 
 impl TrayModel {
@@ -47,7 +39,6 @@ impl TrayModel {
             flash: AtomicBool::new(false),
             busy: AtomicBool::new(false),
             cmd_tx,
-            suggestions: std::sync::Mutex::new(None),
         })
     }
 
@@ -65,23 +56,6 @@ impl TrayModel {
 
     pub fn is_busy(&self) -> bool {
         self.busy.load(Ordering::SeqCst)
-    }
-
-    /// Update the suggestion menu contents. `None` clears them.
-    pub fn set_suggestions(&self, original: &str, slots: &[String], can_learn: bool) {
-        *self.suggestions.lock().unwrap() = Some((
-            original.to_string(),
-            slots.to_vec(),
-            can_learn,
-        ));
-    }
-
-    pub fn clear_suggestions(&self) {
-        *self.suggestions.lock().unwrap() = None;
-    }
-
-    pub fn suggestions(&self) -> Option<(String, Vec<String>, bool)> {
-        self.suggestions.lock().unwrap().clone()
     }
 }
 
@@ -246,43 +220,6 @@ impl Tray for SwitchFixTray {
                 ..Default::default()
             }),
         ];
-
-        // Suggestion candidates (fallback when the Plasma widget is not placed).
-        if let Some((original, slots, can_learn)) = self.model.suggestions() {
-            items.push(MenuItem::Separator);
-            items.push(MenuItem::Standard(StandardItem {
-                label: format!("Исправить: «{original}»"),
-                enabled: false,
-                ..Default::default()
-            }));
-            for (i, s) in slots.iter().enumerate() {
-                let n = (i + 1) as u8;
-                let label = format!("{}. {s}", i + 1);
-                items.push(MenuItem::Standard(StandardItem {
-                    label,
-                    activate: Box::new(move |this: &mut Self| {
-                        let _ = this.model.cmd_tx.try_send(TrayCommand::AcceptSuggestion(n));
-                    }),
-                    ..Default::default()
-                }));
-            }
-            if can_learn {
-                items.push(MenuItem::Standard(StandardItem {
-                    label: "+в словарь".into(),
-                    activate: Box::new(|this: &mut Self| {
-                        let _ = this.model.cmd_tx.try_send(TrayCommand::LearnWord);
-                    }),
-                    ..Default::default()
-                }));
-            }
-            items.push(MenuItem::Standard(StandardItem {
-                label: "Пропустить".into(),
-                activate: Box::new(|this: &mut Self| {
-                    let _ = this.model.cmd_tx.try_send(TrayCommand::DismissSuggestions);
-                }),
-                ..Default::default()
-            }));
-        }
 
         items.push(MenuItem::Separator);
         items.push(MenuItem::Standard(StandardItem {

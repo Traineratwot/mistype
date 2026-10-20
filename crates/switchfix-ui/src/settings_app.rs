@@ -40,34 +40,22 @@ pub struct HotkeyMods {
 pub enum HotkeyField {
     Selection,
     Toggle,
-    FixSpelling,
     LlmFixSelection,
-    Accept1,
-    Accept2,
-    Accept3,
 }
 
 impl HotkeyField {
-    pub const COUNT: usize = 7;
+    pub const COUNT: usize = 3;
     pub const ALL: [HotkeyField; Self::COUNT] = [
         HotkeyField::Selection,
         HotkeyField::Toggle,
-        HotkeyField::FixSpelling,
         HotkeyField::LlmFixSelection,
-        HotkeyField::Accept1,
-        HotkeyField::Accept2,
-        HotkeyField::Accept3,
     ];
 
     pub fn index(self) -> usize {
         match self {
             HotkeyField::Selection => 0,
             HotkeyField::Toggle => 1,
-            HotkeyField::FixSpelling => 2,
-            HotkeyField::LlmFixSelection => 3,
-            HotkeyField::Accept1 => 4,
-            HotkeyField::Accept2 => 5,
-            HotkeyField::Accept3 => 6,
+            HotkeyField::LlmFixSelection => 2,
         }
     }
 
@@ -75,11 +63,7 @@ impl HotkeyField {
         match self {
             HotkeyField::Selection => &cfg.hotkeys.convert_selection,
             HotkeyField::Toggle => &cfg.hotkeys.toggle_enabled,
-            HotkeyField::FixSpelling => &cfg.hotkeys.fix_spelling,
             HotkeyField::LlmFixSelection => &cfg.hotkeys.llm_fix_selection,
-            HotkeyField::Accept1 => &cfg.hotkeys.accept_suggestion_1,
-            HotkeyField::Accept2 => &cfg.hotkeys.accept_suggestion_2,
-            HotkeyField::Accept3 => &cfg.hotkeys.accept_suggestion_3,
         }
     }
 
@@ -87,11 +71,7 @@ impl HotkeyField {
         match self {
             HotkeyField::Selection => cfg.hotkeys.convert_selection = value,
             HotkeyField::Toggle => cfg.hotkeys.toggle_enabled = value,
-            HotkeyField::FixSpelling => cfg.hotkeys.fix_spelling = value,
             HotkeyField::LlmFixSelection => cfg.hotkeys.llm_fix_selection = value,
-            HotkeyField::Accept1 => cfg.hotkeys.accept_suggestion_1 = value,
-            HotkeyField::Accept2 => cfg.hotkeys.accept_suggestion_2 = value,
-            HotkeyField::Accept3 => cfg.hotkeys.accept_suggestion_3 = value,
         }
     }
 }
@@ -109,11 +89,13 @@ pub enum Message {
     ToggleEnabled(bool),
     ToggleTypingBuffer(bool),
     ToggleHotkeyConsume(bool),
-    ToggleSpell(bool),
-    SpellMode(String),
-    ToggleSpellSound(bool),
-    ToggleLlmSelection(bool),
+    ToggleLlmEnabled(bool),
     Language(String),
+    LlmBaseUrl(String),
+    LlmApiToken(String),
+    LlmModel(String),
+    LlmSystemPrompt(String),
+    LlmTimeout(String),
     StartCapture(HotkeyField),
     CancelCapture,
     ClearHotkey(HotkeyField),
@@ -172,11 +154,17 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
         Message::ToggleEnabled(v) => app.cfg.general.enabled_on_start = v,
         Message::ToggleTypingBuffer(v) => app.cfg.privacy.typing_buffer = v,
         Message::ToggleHotkeyConsume(v) => app.cfg.hotkeys.hotkey_consume = v,
-        Message::ToggleLlmSelection(v) => app.cfg.spell.llm_selection = v,
-        Message::ToggleSpell(v) => app.cfg.spell.enabled = v,
-        Message::SpellMode(m) => app.cfg.spell.mode = m,
-        Message::ToggleSpellSound(v) => app.cfg.spell.sound = v,
+        Message::ToggleLlmEnabled(v) => app.cfg.llm.enabled = v,
         Message::Language(s) => app.cfg.general.language = s,
+        Message::LlmBaseUrl(s) => app.cfg.llm.base_url = s,
+        Message::LlmApiToken(s) => app.cfg.llm.api_token = s,
+        Message::LlmModel(s) => app.cfg.llm.model = s,
+        Message::LlmSystemPrompt(s) => app.cfg.llm.system_prompt = s,
+        Message::LlmTimeout(s) => {
+            if let Ok(n) = s.trim().parse::<u64>() {
+                app.cfg.llm.timeout_ms = n;
+            }
+        }
         Message::StartCapture(field) => {
             if !app.paused_for_capture {
                 write_capture_pause(true);
@@ -692,123 +680,81 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
                 capturing == Some(HotkeyField::Selection),
                 app.mods[HotkeyField::Selection.index()],
             ),
-            hotkey_row(
-                "Исправить последнее слово",
-                "Без выделения: берёт последнее набранное слово \
-                 и заменяет на лучший вариант — исправляет опечатку \
-                 или переключает раскладку (ghbdtn → привет).",
-                HotkeyField::FixSpelling.get(cfg),
-                HotkeyField::FixSpelling,
-                capturing == Some(HotkeyField::FixSpelling),
-                app.mods[HotkeyField::FixSpelling.index()],
-            ),
             cancel_btn,
         ]
         .spacing(12),
     );
 
-    // ── Исправление через LLM ──────────────────────────────────────────
+    // ── LLM-исправление ────────────────────────────────────────────────
     let llm = section_card(
-        "Исправление через LLM",
+        "LLM-исправление",
         column![
             checkbox(
                 "Разрешить LLM-исправление выделенного текста",
-                cfg.spell.llm_selection
+                cfg.llm.enabled
             )
-            .on_toggle(Message::ToggleLlmSelection),
+            .on_toggle(Message::ToggleLlmEnabled),
             hotkey_row(
-                "Исправить орфографию и грамматику выделенного",
-                "Весь выделенный текст отправляется в LLM: \
-                 исправляются опечатки, орфография и грамматика. \
-                 Иконка в трее мигает жёлтым, пока модель работает, \
-                 затем выделение заменяется на результат. \
-                 Ручное действие, не авто-замена. Требуется настроенный llm_cmd.",
+                "Исправить выделенный текст через LLM",
+                "Выделите текст и нажмите сочетание (по умолчанию Alt+R). \
+                 Результат заменит выделение. Одно Backspace в течение ~4 секунд \
+                 отменяет замену и возвращает исходный текст. \
+                 Ручное действие, не авто-замена.",
                 HotkeyField::LlmFixSelection.get(cfg),
                 HotkeyField::LlmFixSelection,
                 capturing == Some(HotkeyField::LlmFixSelection),
                 app.mods[HotkeyField::LlmFixSelection.index()],
             ),
-        ]
-        .spacing(10),
-    );
-
-    // ── Подсказки ──────────────────────────────────────────────────────
-    let suggestions = section_card(
-        "Подсказки (полоса предложений)",
-        column![
+            row![
+                text("Адрес API:"),
+                iced::widget::text_input("https://api.openai.com", &cfg.llm.base_url)
+                    .on_input(Message::LlmBaseUrl)
+                    .width(Length::Fill),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
             text(
-                "Пока видна полоса предложений, можно принять вариант сочетанием \
-                 или кликом. Максимум 3 варианта."
-            )
-            .size(13),
-            hotkey_row(
-                "Принять подсказку 1 (лучший вариант)",
-                "Применяет первое — наиболее вероятное — предложение из списка.",
-                HotkeyField::Accept1.get(cfg),
-                HotkeyField::Accept1,
-                capturing == Some(HotkeyField::Accept1),
-                app.mods[HotkeyField::Accept1.index()],
-            ),
-            hotkey_row(
-                "Принять подсказку 2",
-                "Применяет второе предложение из списка.",
-                HotkeyField::Accept2.get(cfg),
-                HotkeyField::Accept2,
-                capturing == Some(HotkeyField::Accept2),
-                app.mods[HotkeyField::Accept2.index()],
-            ),
-            hotkey_row(
-                "Принять подсказку 3",
-                "Применяет третье предложение из списка.",
-                HotkeyField::Accept3.get(cfg),
-                HotkeyField::Accept3,
-                capturing == Some(HotkeyField::Accept3),
-                app.mods[HotkeyField::Accept3.index()],
-            ),
-        ]
-        .spacing(12),
-    );
-
-    // ── Правописание ───────────────────────────────────────────────────
-    let spell_modes = [
-        ("hint", "Подсказки"),
-        ("hotkey", "Только хоткей"),
-        ("auto", "Авто-исправление"),
-        ("off", "Выкл."),
-    ];
-    let mut mode_row = row![].spacing(6);
-    for (id, label) in spell_modes {
-        let selected = cfg.spell.mode == id;
-        mode_row = mode_row.push(
-            button(text(label).size(12))
-                .padding(6)
-                .style(if selected {
-                    button::primary
-                } else {
-                    button::secondary
-                })
-                .on_press(Message::SpellMode(id.into())),
-        );
-    }
-
-    let spell = section_card(
-        "Правописание",
-        column![
-            checkbox(
-                "Проверять орфографию и подсказывать слова",
-                cfg.spell.enabled
-            )
-            .on_toggle(Message::ToggleSpell),
-            row![text("Режим работы:").size(13), mode_row]
-                .spacing(10)
-                .align_y(iced::Alignment::Center),
-            checkbox("Короткий сигнал при замене слова", cfg.spell.sound)
-                .on_toggle(Message::ToggleSpellSound),
-            text(
-                "Принять подсказку — назначенные сочетания или клик · \
-                 исправить слово — хоткей · добавить в словарь — Ctrl+0"
+                "Базовый URL OpenAI-совместимого API. Запрос идёт на \
+                 {base}/v1/chat/completions. Для Ollama: http://127.0.0.1:11434. \
+                 Пусто = функция выключена."
             )
             .size(12),
+            row![
+                text("API-токен:"),
+                iced::widget::text_input("(не задан)", &cfg.llm.api_token)
+                    .on_input(Message::LlmApiToken)
+                    .width(Length::Fill),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
+            text("Токен хранится в config.toml. Пусто = без заголовка Authorization (локальные серверы).")
+                .size(12),
+            row![
+                text("Модель:"),
+                iced::widget::text_input("gpt-4o-mini", &cfg.llm.model)
+                    .on_input(Message::LlmModel)
+                    .width(Length::Fill),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
+            row![
+                text("Системный промпт:"),
+                iced::widget::text_input("промпт", &cfg.llm.system_prompt)
+                    .on_input(Message::LlmSystemPrompt)
+                    .width(Length::Fill),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
+            text("Отправляется как system-сообщение перед выделенным текстом.")
+                .size(12),
+            row![
+                text("Таймаут, мс:"),
+                iced::widget::text_input("15000", &cfg.llm.timeout_ms.to_string())
+                    .on_input(Message::LlmTimeout)
+                    .width(Length::Fixed(100.0)),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
         ]
         .spacing(10),
     );
@@ -864,8 +810,12 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
                 .style(container::rounded_box),
                 tooltip::Position::Bottom,
             ),
-            text("SwitchFix не отправляет данные в сеть и не сохраняет введённый текст на диск.")
-                .size(12),
+            text(
+                "Текст набирается только в оперативной памяти (опционально). \
+                 При включённом LLM-исправлении выделенный текст отправляется \
+                 на указанный вами API-адрес. Никакой другой текст не уходит в сеть."
+            )
+            .size(12),
         ]
         .spacing(10),
     );
@@ -898,8 +848,6 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
         general,
         text_and_layout,
         llm,
-        suggestions,
-        spell,
         input_grab,
         privacy,
         iced::widget::Space::with_height(4.0),

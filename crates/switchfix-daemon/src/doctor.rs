@@ -232,70 +232,42 @@ pub async fn run() -> DoctorReport {
 
     // Active hotkey bindings from config (what to actually press).
     {
-        use switchfix_app::ports::{ConfigStore, SpellChecker};
+        use switchfix_app::ports::ConfigStore;
         let store = switchfix_adapters::TomlConfigStore::open_default();
         let cfg = store.load().unwrap_or_default();
         lines.push((
             "hotkeys".into(),
             true,
             format!(
-                "selection=[{}]  toggle=[{}]  fix-spelling=[{}]  llm-fix=[{}]{}",
+                "selection=[{}]  toggle=[{}]  llm-fix=[{}]{}",
                 cfg.hotkeys.convert_selection,
                 cfg.hotkeys.toggle_enabled,
-                cfg.hotkeys.fix_spelling,
                 cfg.hotkeys.llm_fix_selection,
-                if cfg.spell.llm_selection {
+                if cfg.llm.enabled {
                     ""
                 } else {
-                    " (disabled)"
+                    " (llm disabled)"
                 }
             ),
         ));
 
-        // Spellcheck dictionaries + user word list.
-        if cfg.spell.enabled {
-            let user_dic = dirs::data_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("switchfix")
-                .join("user.dic");
-            let dict = switchfix_adapters::ZspellDictionary::load(&cfg.spell.languages, user_dic.clone());
-            let langs = dict.languages();
-            let has = !langs.is_empty();
+        // LLM API configuration (never print the token).
+        if cfg.llm.enabled && !cfg.llm.base_url.trim().is_empty() {
             lines.push((
-                "spell dictionaries".into(),
-                has,
-                if has {
-                    format!(
-                        "loaded [{}], mode={}, user.dic={}",
-                        langs.join(", "),
-                        cfg.spell.mode,
-                        if user_dic.is_file() {
-                            user_dic.display().to_string()
-                        } else {
-                            "(not created yet)".into()
-                        }
-                    )
-                } else {
-                    "none found — install hunspell-ru / hunspell-en-us (or switchfix spell off)".into()
-                },
-            ));
-
-            // Plasma suggestion widget.
-            let plasmoid_dir = dirs::home_dir()
-                .unwrap_or_default()
-                .join(".local/share/plasma/plasmoids/org.switchfix.suggestions");
-            let has_widget = plasmoid_dir.is_dir();
-            lines.push((
-                "plasmoid".into(),
-                has_widget,
-                if has_widget {
-                    "org.switchfix.suggestions installed".into()
-                } else {
-                    "not installed — run `switchfix setup` or copy packaging/plasmoid/org.switchfix.suggestions to ~/.local/share/plasma/plasmoids/".into()
-                },
+                "llm api".into(),
+                true,
+                format!("configured (base={}, model={:?})", cfg.llm.base_url, cfg.llm.model),
             ));
         } else {
-            lines.push(("spell dictionaries".into(), true, "spellcheck disabled".into()));
+            lines.push((
+                "llm api".into(),
+                true,
+                format!(
+                    "not configured (enabled={}, base_url set={})",
+                    cfg.llm.enabled,
+                    !cfg.llm.base_url.trim().is_empty()
+                ),
+            ));
         }
     }
 

@@ -17,6 +17,9 @@ fn def_paste_settle() -> u64 {
 fn def_buf_max() -> usize {
     256
 }
+fn def_empty() -> String {
+    String::new()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AppConfig {
@@ -30,8 +33,9 @@ pub struct AppConfig {
     pub behavior: Behavior,
     #[serde(default)]
     pub privacy: Privacy,
+    /// External OpenAI-compatible LLM for «LLM-fix selection».
     #[serde(default)]
-    pub spell: Spell,
+    pub llm: Llm,
 }
 
 impl Default for AppConfig {
@@ -42,7 +46,7 @@ impl Default for AppConfig {
             layouts: LayoutsCfg::default(),
             behavior: Behavior::default(),
             privacy: Privacy::default(),
-            spell: Spell::default(),
+            llm: Llm::default(),
         }
     }
 }
@@ -82,19 +86,10 @@ pub struct Hotkeys {
     pub convert_selection: String,
     #[serde(default = "hk_toggle")]
     pub toggle_enabled: String,
-    #[serde(default = "hk_fix_spelling")]
-    pub fix_spelling: String,
-    /// Send the whole selection to LLM and replace it with the corrected text.
+    /// Send the whole selection to the external LLM and replace it.
     /// Empty string = action disabled.
     #[serde(default = "hk_llm_fix_selection")]
     pub llm_fix_selection: String,
-    /// Accept Nth suggestion while the bar is visible (max 3).
-    #[serde(default = "hk_accept1")]
-    pub accept_suggestion_1: String,
-    #[serde(default = "hk_accept2")]
-    pub accept_suggestion_2: String,
-    #[serde(default = "hk_accept3")]
-    pub accept_suggestion_3: String,
     #[serde(default = "def_false")]
     pub use_portal_hotkeys: bool,
     /// Fully consume hotkeys (EVIOCGRAB): the bound key does not reach apps.
@@ -104,26 +99,14 @@ pub struct Hotkeys {
 }
 
 fn hk_sel() -> String {
-    // Ctrl+Alt+R — convert (replace) wrong-layout text. Avoids Ctrl+1 tab switching.
+    // Ctrl+Alt+R — convert (replace) wrong-layout text.
     "ctrl+alt+r".into()
 }
 fn hk_toggle() -> String {
     "ctrl+alt+t".into()
 }
-fn hk_fix_spelling() -> String {
-    "ctrl+alt+f".into()
-}
 fn hk_llm_fix_selection() -> String {
     "alt+r".into()
-}
-fn hk_accept1() -> String {
-    "ctrl+alt+1".into()
-}
-fn hk_accept2() -> String {
-    "ctrl+alt+2".into()
-}
-fn hk_accept3() -> String {
-    "ctrl+alt+3".into()
 }
 
 impl Default for Hotkeys {
@@ -131,11 +114,7 @@ impl Default for Hotkeys {
         Self {
             convert_selection: hk_sel(),
             toggle_enabled: hk_toggle(),
-            fix_spelling: hk_fix_spelling(),
             llm_fix_selection: hk_llm_fix_selection(),
-            accept_suggestion_1: hk_accept1(),
-            accept_suggestion_2: hk_accept2(),
-            accept_suggestion_3: hk_accept3(),
             use_portal_hotkeys: false,
             hotkey_consume: true,
         }
@@ -262,115 +241,49 @@ impl Default for Privacy {
     }
 }
 
-/// Spellcheck + suggestion bar settings (Phase 2).
+/// External OpenAI-compatible chat-completions backend for «LLM-fix selection».
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Spell {
+pub struct Llm {
+    /// Master switch for the hotkey feature.
     #[serde(default = "def_true")]
     pub enabled: bool,
-    /// "off" | "hint" | "hotkey" | "auto"
-    #[serde(default = "def_spell_mode")]
-    pub mode: String,
-    /// Dictionary language ids to load, e.g. `["ru", "en"]`.
-    #[serde(default = "def_spell_langs")]
-    pub languages: Vec<String>,
-    /// Skip words shorter than this.
-    #[serde(default = "def_min_word_len")]
-    pub min_word_len: usize,
-    /// Start completions after this many typed characters.
-    #[serde(default = "def_completion_min_chars")]
-    pub completion_min_chars: usize,
-    /// How many candidate slots the bar shows.
-    #[serde(default = "def_suggest_count")]
-    pub suggest_count: usize,
-    /// "bottom" | "top"
-    #[serde(default = "def_bar_position")]
-    pub bar_position: String,
-    #[serde(default = "def_bar_timeout")]
-    pub bar_timeout_ms: u64,
-    /// Minimum word length for silent auto-replace.
-    #[serde(default = "def_auto_fix_min_len")]
-    pub auto_fix_min_len: usize,
-    /// Play a short sound when a word is replaced.
-    #[serde(default = "def_true")]
-    pub sound: bool,
-    /// Spell backend: `dict` (compat only) | `hybrid` (dict + context) | `auto`.
-    #[serde(default = "def_spell_backend")]
-    pub backend: String,
-    /// LanguageTool HTTP base URL (e.g. `http://127.0.0.1:8010`). Empty = off.
+    /// API base URL, e.g. `https://api.openai.com` or `http://127.0.0.1:11434`.
+    /// Client appends `/v1/chat/completions`. Empty = feature off.
     #[serde(default = "def_empty")]
-    pub lt_url: String,
-    /// External corrector command: reads JSON on stdin, writes JSON on stdout.
-    /// Empty = off. Example: `llm-spell` or `ollama run llama3.2:1b`.
+    pub base_url: String,
+    /// Bearer token. Empty = omit Authorization header (local servers).
     #[serde(default = "def_empty")]
-    pub llm_cmd: String,
-    /// Max recent characters sent as context to LT/LLM.
-    #[serde(default = "def_context_chars")]
-    pub context_chars: usize,
-    /// Wait this long after a word (Space) before spell-checking, so the
-    /// user can keep typing without the next word being torn by a replace.
-    #[serde(default = "def_debounce_ms")]
-    pub debounce_ms: u64,
-    /// Master switch for the «LLM-fix selection» hotkey feature (not auto-replace).
-    #[serde(default = "def_true")]
-    pub llm_selection: bool,
+    pub api_token: String,
+    /// System / initial prompt prepended as the first `system` message.
+    #[serde(default = "def_llm_system_prompt")]
+    pub system_prompt: String,
+    /// Optional model id (`gpt-4o-mini`, `qwen2.5:0.5b`, …).
+    /// Empty = omit the `model` field.
+    #[serde(default = "def_empty")]
+    pub model: String,
+    /// HTTP timeout for the completion call, milliseconds.
+    #[serde(default = "def_llm_timeout")]
+    pub timeout_ms: u64,
 }
 
-fn def_spell_mode() -> String {
-    "hint".into()
+fn def_llm_system_prompt() -> String {
+    "Исправь орфографию, грамматику и пунктуацию в тексте. \
+     Верни ТОЛЬКО исправленный текст без пояснений и без кавычек."
+        .into()
 }
-fn def_spell_langs() -> Vec<String> {
-    vec!["ru".into(), "en".into()]
-}
-fn def_min_word_len() -> usize {
-    3
-}
-fn def_completion_min_chars() -> usize {
-    3
-}
-fn def_suggest_count() -> usize {
-    3
-}
-fn def_bar_position() -> String {
-    "bottom".into()
-}
-fn def_bar_timeout() -> u64 {
-    4500
-}
-fn def_auto_fix_min_len() -> usize {
-    4
-}
-fn def_spell_backend() -> String {
-    "hybrid".into()
-}
-fn def_empty() -> String {
-    String::new()
-}
-fn def_context_chars() -> usize {
-    80
-}
-fn def_debounce_ms() -> u64 {
-    180
+fn def_llm_timeout() -> u64 {
+    15_000
 }
 
-impl Default for Spell {
+impl Default for Llm {
     fn default() -> Self {
         Self {
             enabled: true,
-            mode: def_spell_mode(),
-            languages: def_spell_langs(),
-            min_word_len: def_min_word_len(),
-            completion_min_chars: def_completion_min_chars(),
-            suggest_count: def_suggest_count(),
-            bar_position: def_bar_position(),
-            bar_timeout_ms: def_bar_timeout(),
-            auto_fix_min_len: def_auto_fix_min_len(),
-            sound: true,
-            backend: def_spell_backend(),
-            lt_url: def_empty(),
-            llm_cmd: def_empty(),
-            context_chars: def_context_chars(),
-            debounce_ms: def_debounce_ms(),
-            llm_selection: true,
+            base_url: def_empty(),
+            api_token: def_empty(),
+            system_prompt: def_llm_system_prompt(),
+            model: def_empty(),
+            timeout_ms: def_llm_timeout(),
         }
     }
 }
@@ -382,10 +295,8 @@ pub enum ConfigInvalid {
     LayoutIndex { value: String },
     SettleMs { field: String, value: u64 },
     EmptyLayouts,
-    SpellMode { value: String },
-    SpellBarPosition { value: String },
-    SpellSuggestCount { value: usize },
-    SpellBackend { value: String },
+    LlmBaseUrl { value: String },
+    LlmTimeout { value: u64 },
 }
 
 impl std::fmt::Display for ConfigInvalid {
@@ -401,20 +312,14 @@ impl std::fmt::Display for ConfigInvalid {
                 write!(f, "invalid {field}={value} (must be 0..=10000)")
             }
             ConfigInvalid::EmptyLayouts => write!(f, "layouts.active must not be empty"),
-            ConfigInvalid::SpellMode { value } => {
-                write!(f, "invalid spell.mode '{value}' (expected off|hint|hotkey|auto)")
-            }
-            ConfigInvalid::SpellBarPosition { value } => {
-                write!(f, "invalid spell.bar_position '{value}' (expected bottom|top)")
-            }
-            ConfigInvalid::SpellSuggestCount { value } => {
-                write!(f, "invalid spell.suggest_count {value} (must be 1..=5)")
-            }
-            ConfigInvalid::SpellBackend { value } => {
+            ConfigInvalid::LlmBaseUrl { value } => {
                 write!(
                     f,
-                    "invalid spell.backend '{value}' (expected dict|hybrid|auto)"
+                    "invalid llm.base_url '{value}' (expected http:// or https:// URL)"
                 )
+            }
+            ConfigInvalid::LlmTimeout { value } => {
+                write!(f, "invalid llm.timeout_ms {value} (must be 500..=120000)")
             }
         }
     }
@@ -428,7 +333,6 @@ impl AppConfig {
         for (field, value) in [
             ("hotkeys.convert_selection", &self.hotkeys.convert_selection),
             ("hotkeys.toggle_enabled", &self.hotkeys.toggle_enabled),
-            ("hotkeys.fix_spelling", &self.hotkeys.fix_spelling),
             ("hotkeys.llm_fix_selection", &self.hotkeys.llm_fix_selection),
         ] {
             // Empty = action disabled (Esc reset in the settings UI).
@@ -464,24 +368,16 @@ impl AppConfig {
             }
         }
 
-        if !matches!(self.spell.mode.as_str(), "off" | "hint" | "hotkey" | "auto") {
-            errs.push(ConfigInvalid::SpellMode {
-                value: self.spell.mode.clone(),
+        // LLM (external OpenAI-compatible API).
+        let base = self.llm.base_url.trim();
+        if !base.is_empty() && !(base.starts_with("http://") || base.starts_with("https://")) {
+            errs.push(ConfigInvalid::LlmBaseUrl {
+                value: self.llm.base_url.clone(),
             });
         }
-        if !matches!(self.spell.bar_position.as_str(), "bottom" | "top") {
-            errs.push(ConfigInvalid::SpellBarPosition {
-                value: self.spell.bar_position.clone(),
-            });
-        }
-        if !(1..=5).contains(&self.spell.suggest_count) {
-            errs.push(ConfigInvalid::SpellSuggestCount {
-                value: self.spell.suggest_count,
-            });
-        }
-        if !matches!(self.spell.backend.as_str(), "dict" | "hybrid" | "auto") {
-            errs.push(ConfigInvalid::SpellBackend {
-                value: self.spell.backend.clone(),
+        if !(500..=120_000).contains(&self.llm.timeout_ms) {
+            errs.push(ConfigInvalid::LlmTimeout {
+                value: self.llm.timeout_ms,
             });
         }
 
@@ -602,5 +498,36 @@ mod tests {
         for bad in ["", "+", "ctrl+", "ctrl+shift+", "ctrl+shift+ctrl", "foobar"] {
             assert!(!is_valid_hotkey(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn llm_defaults_are_valid() {
+        let cfg = AppConfig::default();
+        assert!(cfg.llm.enabled);
+        assert!(cfg.llm.base_url.is_empty());
+        assert_eq!(cfg.llm.timeout_ms, 15_000);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_bad_llm_base_url() {
+        let mut cfg = AppConfig::default();
+        cfg.llm.base_url = "ftp://x".into();
+        assert!(cfg.validate().is_err());
+        cfg.llm.base_url = "https://api.openai.com".into();
+        assert!(cfg.validate().is_ok());
+        cfg.llm.base_url = "http://127.0.0.1:11434".into();
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_bad_llm_timeout() {
+        let mut cfg = AppConfig::default();
+        cfg.llm.timeout_ms = 10;
+        assert!(cfg.validate().is_err());
+        cfg.llm.timeout_ms = 200_000;
+        assert!(cfg.validate().is_err());
+        cfg.llm.timeout_ms = 15_000;
+        assert!(cfg.validate().is_ok());
     }
 }

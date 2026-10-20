@@ -32,7 +32,6 @@ pub(crate) fn parse_hotkey_bindings(
             HotkeyEvent::ConvertSelection,
         ),
         (cfg.hotkeys.toggle_enabled.clone(), HotkeyEvent::ToggleEnabled),
-        (cfg.hotkeys.fix_spelling.clone(), HotkeyEvent::FixSpelling),
         (
             cfg.hotkeys.llm_fix_selection.clone(),
             HotkeyEvent::LlmFixSelection,
@@ -51,35 +50,6 @@ pub(crate) fn parse_hotkey_bindings(
     out
 }
 
-/// Dynamic accept chords used while the suggestion bar is visible.
-///
-/// Bound via `hotkeys.accept_suggestion_1..=3` (max 3 slots). Matched only
-/// while `bar_visible` is set so apps keep their normal shortcuts otherwise.
-pub(crate) fn dynamic_suggestion_bindings(cfg: &AppConfig) -> Vec<(HotkeyBinding, HotkeyEvent)> {
-    let mut out = Vec::new();
-    let slots = [
-        (cfg.hotkeys.accept_suggestion_1.as_str(), 1u8),
-        (cfg.hotkeys.accept_suggestion_2.as_str(), 2),
-        (cfg.hotkeys.accept_suggestion_3.as_str(), 3),
-    ];
-    for (s, n) in slots {
-        if s.trim().is_empty() {
-            continue;
-        }
-        match HotkeyBinding::parse(s) {
-            Some(b) => out.push((b, HotkeyEvent::AcceptSuggestion(n))),
-            None => warn!("invalid accept hotkey {n}: {s:?}"),
-        }
-    }
-    if let Some(b) = HotkeyBinding::parse("ctrl+alt+0") {
-        out.push((b, HotkeyEvent::AddToDictionary));
-    }
-    if let Some(b) = HotkeyBinding::parse("ctrl+alt+period") {
-        out.push((b, HotkeyEvent::DismissSuggestions));
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,42 +60,21 @@ mod tests {
         let mut cfg = AppConfig::default();
         cfg.hotkeys.convert_selection = "ctrl+f1".into();
         cfg.hotkeys.toggle_enabled = "ctrl+pause".into();
-        cfg.hotkeys.fix_spelling = "ctrl+f2".into();
         cfg.hotkeys.llm_fix_selection = "alt+r".into();
         let parsed = parse_hotkey_bindings(&cfg);
-        assert_eq!(parsed.len(), 4);
+        assert_eq!(parsed.len(), 3);
         assert!(parsed
             .iter()
             .any(|(b, e)| b.key == "r" && b.alt && matches!(e, HotkeyEvent::LlmFixSelection)));
     }
 
     #[test]
-    fn dynamic_suggestion_bindings_cover_slots() {
-        let cfg = AppConfig::default();
-        let parsed = dynamic_suggestion_bindings(&cfg);
-        // accept 1..3 + learn + dismiss
-        assert_eq!(parsed.len(), 5);
-        assert!(parsed
-            .iter()
-            .any(|(b, e)| b.key == "1" && b.ctrl && b.alt
-                && matches!(e, HotkeyEvent::AcceptSuggestion(1))));
-    }
-
-    #[test]
-    fn dynamic_suggestion_bindings_respect_custom_and_empty() {
+    fn parse_hotkey_bindings_empty_skipped() {
         let mut cfg = AppConfig::default();
-        cfg.hotkeys.accept_suggestion_1 = "ctrl+f1".into();
-        cfg.hotkeys.accept_suggestion_2 = String::new();
-        cfg.hotkeys.accept_suggestion_3 = "ctrl+f3".into();
-        let parsed = dynamic_suggestion_bindings(&cfg);
-        assert!(parsed
-            .iter()
-            .any(|(b, e)| b.key == "f1" && matches!(e, HotkeyEvent::AcceptSuggestion(1))));
-        assert!(parsed
-            .iter()
-            .any(|(b, e)| b.key == "f3" && matches!(e, HotkeyEvent::AcceptSuggestion(3))));
+        cfg.hotkeys.convert_selection = String::new();
+        let parsed = parse_hotkey_bindings(&cfg);
         assert!(!parsed
             .iter()
-            .any(|(_, e)| matches!(e, HotkeyEvent::AcceptSuggestion(2))));
+            .any(|(_, e)| matches!(e, HotkeyEvent::ConvertSelection)));
     }
 }

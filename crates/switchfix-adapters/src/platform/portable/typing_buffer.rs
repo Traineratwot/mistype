@@ -123,10 +123,9 @@ impl SharedTypingBuffer {
 
     pub fn pop(&self) {
         self.chars.lock().unwrap().pop_back();
-        // Notify spell layer so it can undo a recent auto-replace.
-        if self.enabled.load(Ordering::SeqCst) {
-            let _ = self.word_tx.send(WordEvent::Backspace);
-        }
+        // Always emit Backspace — the LLM-undo signal is independent of
+        // `privacy.typing_buffer` (which only gates text storage).
+        let _ = self.word_tx.send(WordEvent::Backspace);
     }
 
     pub fn clear(&self) {
@@ -197,7 +196,7 @@ impl SharedTypingBuffer {
         }
     }
 
-    /// Last `max_chars` characters as a string (spell-backend context).
+    /// Last `max_chars` characters as a string.
     pub fn peek_tail(&self, max_chars: usize) -> String {
         if !self.enabled.load(Ordering::SeqCst) {
             return String::new();
@@ -357,5 +356,21 @@ mod tests {
         let start = Instant::now();
         b.wait_keys_quiet(20, 500).await;
         assert!(start.elapsed() < Duration::from_millis(200), "returns quickly after release");
+    }
+
+    #[test]
+    fn backspace_event_emitted_even_when_disabled() {
+        // privacy.typing_buffer=false must still deliver the undo signal.
+        let b = SharedTypingBuffer::new(64, false);
+        let mut rx = b.word_events();
+        b.push('x'); // no-op when disabled
+        b.pop();
+        let mut got_backspace = false;
+        while let Ok(ev) = rx.try_recv() {
+            if matches!(ev, WordEvent::Backspace) {
+                got_backspace = true;
+            }
+        }
+        assert!(got_backspace, "Backspace signal must not depend on typing_buffer");
     }
 }

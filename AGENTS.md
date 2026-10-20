@@ -1,27 +1,32 @@
 # SwitchFix
 
 Linux tray utility that fixes text typed in the wrong keyboard layout (EN↔RU),
-switches the system layout, and (in later phases) will add spelling fixes and
-snippet expansion. Think **Punto Switcher / Keyboop** for **KDE Plasma 6 Wayland**.
+switches the system layout, and LLM-fixes a selected text (spelling / grammar /
+punctuation) via an external OpenAI-compatible API. Think **Punto Switcher /
+Keyboop** for **KDE Plasma 6 Wayland**.
 
 Primary target: **Kubuntu (Debian + KDE Plasma 6, Wayland)**. Other OS/DE are
 stubs behind a platform layer (groundwork for the future).
 
 ---
 
-## Status (MVP + Phase 2)
+## Status (MVP + LLM-fix)
 
 | Layer | Crate | Status |
 |-------|-------|--------|
-| Domain (conversion, buffer, state, spell heuristics) | `switchfix-domain` | ✅ tests green |
-| Use-cases + ports | `switchfix-app` | ✅ tests green (fakes) |
-| Platform layer + OS adapters | `switchfix-adapters` | ✅ tests green |
-| Tray + settings GUI + suggestion bar | `switchfix-ui` | ✅ compiles, flash/sound + bar |
-| CLI / daemon / doctor / selftest / spell | `switchfix-daemon` | ✅ works on live KDE |
+| Domain (conversion, buffer, state, `detect_lang`) | `switchfix-domain` | ✅ tests green |
+| Use-cases + ports (incl. `TextCorrector`, undo) | `switchfix-app` | ✅ tests green (fakes) |
+| Platform layer + OS adapters (incl. `OpenAiCorrector`) | `switchfix-adapters` | ✅ tests green |
+| Tray + settings GUI | `switchfix-ui` | ✅ compiles, flash/sound + busy blink |
+| CLI / daemon / doctor / selftest | `switchfix-daemon` | ✅ works on live KDE |
 
-**Tests: 158 green** (+ 1 ignored live KDE D-Bus test). Verified live:
-hotkey intercept (evdev), layout switch (zbus), convert, tray flash + sound,
-spellcheck CLI (zspell RU/EN + layout-convert candidates).
+**Tests: 128 green** (+ 1 ignored live KDE D-Bus test). Verified live:
+hotkey intercept (evdev), layout switch (zbus), convert, tray flash + sound.
+
+Removed in the strip-down (do not resurrect): built-in LLM crate
+(`switchfix-llm` / llama.cpp), spell-as-you-type, suggestion bar, completions,
+zspell / LanguageTool / `llm_cmd` correctors, Plasma plasmoid
+(`org.switchfix.suggestions`, `docs/PLASMA6-WIDGETS.md` — deleted).
 
 ---
 
@@ -29,14 +34,12 @@ spellcheck CLI (zspell RU/EN + layout-convert candidates).
 
 ```bash
 cargo build --release
-cargo test --workspace          # must stay green (119)
+cargo test --workspace          # must stay green (128)
 
-./target/release/switchfix doctor     # diagnostics incl. platform + hotkeys + dictionaries
+./target/release/switchfix doctor     # diagnostics incl. platform + hotkeys + llm api
 ./target/release/switchfix selftest   # injects ctrl+f20 via uinput, verifies evdev sees it
 ./target/release/switchfix beep       # play hotkey feedback sound
 ./target/release/switchfix convert --text 'ghbdtn'   # → привет
-./target/release/switchfix spell --text 'приветт'    # → 1. привет
-./target/release/switchfix spell --text 'ghbdtn'     # → 1. привет (раскладка)
 
 # live KDE D-Bus smoke (ignored by default):
 cargo test -p switchfix-adapters -- --ignored
@@ -59,21 +62,26 @@ sg input -c './target/release/switchfix daemon'
 
 | Action | Default key |
 |--------|-------------|
-| Convert selection | `ctrl+alt+r` |
-| Fix spelling of last word | `ctrl+alt+f` |
+| Convert selection (EN↔RU flip) | `ctrl+alt+r` |
 | LLM-fix selection (whole selection → LLM → replace) | `alt+r` |
 | Toggle enabled | `ctrl+alt+t` |
-| Accept suggestion slot 1–3 (while bar visible) | `ctrl+alt+1` … `ctrl+alt+3` — **configurable in Settings** |
-| Add word to dictionary (while bar visible) | `ctrl+alt+0` |
-| Dismiss suggestion bar | `ctrl+alt+period` |
+| Undo last LLM replace | **1× Backspace within ~4 s** (not configurable) |
 
-The live config may differ (e.g. `insert`) — always check `switchfix doctor`.
-Click-to-capture in Settings UI; Esc cancels. After config change: **Save restarts
-the daemon automatically** (`$TMPDIR/switchfix.restart` → daemon re-execs itself,
-same PID, so systemd/user service stays intact).
+The live config may differ — always check `switchfix doctor`.
+Click-to-capture in Settings UI; Esc clears the binding. After config change:
+**Save restarts the daemon automatically** (`$TMPDIR/switchfix.restart` →
+daemon re-execs itself, same PID, so systemd/user service stays intact).
+
+**Backspace undo (LLM-fix only):** after a successful LLM replace, one physical
+Backspace within **4 s** restores the original text fully (the replace is
+torn down: backspaces + retypes the original). If the user types anything else
+first, the undo is cancelled. Undo works even with `privacy.typing_buffer=false`
+(the Backspace event is ungated). After the window expires a Backspace is just
+a Backspace.
 
 Hotkey feedback: tray icon flashes amber (~350 ms) + system sound + log line
-`hotkey received: …`. Toggle via `hotkeys.hotkey_consume` (default `true`):
+`hotkey received: …`. During an LLM call the tray icon blinks **yellow** (busy)
+until the reply arrives. Toggle via `hotkeys.hotkey_consume` (default `true`):
 EVIOCGRAB + uinput passthrough so the key never leaks to apps.
 
 ---
@@ -83,7 +91,7 @@ EVIOCGRAB + uinput passthrough so the key never leaks to apps.
 ```
 ui / daemon  →  app (use-cases, ports=traits)  →  domain (pure)
                         ↑ implements
-                   adapters / platform (evdev, uinput, zbus, clipboard, toml)
+                   adapters / platform (evdev, uinput, zbus, clipboard, toml, ureq)
 ```
 
 ### Platform layer (OOP-style: Strategy + Abstract Factory)
@@ -97,15 +105,16 @@ platform/
   factory.rs      # create_platform() — cfg(target_os) + runtime DE
   stub.rs         # UnsupportedPlatform (fallback)
   portable/       # SharedTypingBuffer, ArboardClipboard, TomlConfigStore,
-                  # ManualHotkeySource, LogNotifier
+                  # ManualHotkeySource, LogNotifier, OpenAiCorrector
   linux/          # #[cfg(target_os = "linux")]
     evdev_hotkey.rs, uinput_injector.rs, selftest.rs
-    kde/          # KdePlatform (full) + layout.rs (org.kde.keyboard)
+    kde/          # KdePlatform (full) + layout.rs (org.kde.keyboard) + focus.rs
     gnome/        # stub → Unsupported
   windows/, macos/  # stubs (cfg-gated)
 ```
 
-- **One `Platform` per OS/DE**; `build_services()` returns all 8 ports.
+- **One `Platform` per OS/DE**; `build_services()` returns the 8 core ports
+  (+ optional `FocusMonitor`).
 - Selection: compile-time OS, runtime `XDG_CURRENT_DESKTOP` (KDE / GNOME / other).
 - Only **linux/kde** is fully implemented. Stubs return `PlatformError::Unsupported`.
 - Do **not** re-export `evdev::KeyCode` outside `platform/linux`.
@@ -113,14 +122,25 @@ platform/
 ### Ports (unified interface) — `switchfix-app/src/ports.rs`
 
 `TextInjector`, `ClipboardPort`, `SelectionCapture`, `TypingBufferPort`,
-`LayoutSwitcher`, `HotkeySource`, `ConfigStore`, `Notifier`.
+`TextCorrector`, `LayoutSwitcher`, `HotkeySource`, `ConfigStore`, `Notifier`,
+`FocusMonitor` (optional).
+
+`TextCorrector::correct_text(&str) -> String` replaces the old
+ContextCorrector/SpellChecker. The only implementation is `OpenAiCorrector`
+(`platform/portable/openai_corrector.rs`, ureq + `spawn_blocking`). It is
+**not** part of `PlatformServices` — it is built/rebuilt by
+`wiring::install_text_corrector` from `cfg.llm` at startup **and on config
+reload**.
 
 Composition root: `switchfix-daemon/src/wiring.rs`
-(`create_platform` → `build_services` → `CorrectionService`).
+(`create_platform` → `build_services` → `CorrectionService` →
+`install_text_corrector`).
 
 `CorrectionService::new` arg order:
 `injector, clipboard, selection, buffer, layouts, notifier, tables, config_rx, enabled`.
 Clipboard + selection must be **two Arc views of one** `ArboardClipboard`.
+Undo state lives in `CorrectionService` (`UndoState`, `on_backspace`,
+`on_typing`, `clear_undo`) — 4 s window after an LLM replace.
 
 See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 
@@ -129,8 +149,10 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 ## Development rules
 
 1. **Ports stay abstract.** New OS/DE support = new `Platform` impl, not changes
-   to domain/app/CorrectionService. The 8 traits are the contract.
-2. **Domain is pure** — no I/O, no evdev/zbus, no `std::process`. Adapters own OS.
+   to domain/app/CorrectionService. The traits in `ports.rs` are the contract.
+2. **Domain is pure** — no I/O, no evdev/zbus, no `std::process`, no network.
+   Adapters own OS. `detect_lang` is the only spell-era helper left
+   (`domain/lang.rs`).
 3. **Dependencies flow downward only:** `ui/daemon → app → domain`. UI must not
    depend on adapters (take `Box<dyn ConfigStore>` etc.).
 4. **cfg-gate OS deps.** `evdev`, `zbus`, `futures-lite` live under
@@ -138,8 +160,10 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
    import them.
 5. **Tests must stay green.** `cargo test --workspace` after every change.
    Fakes in `switchfix-tests/tests/fakes/` implement ports — keep them compiling.
-6. **No network, no keylog persistence.** Typing buffer is RAM-only and optional
-   (`privacy.typing_buffer`). Never log typed text or clipboard contents.
+6. **No network except the user-configured LLM endpoint.** No telemetry, no
+   keylog persistence. Typing buffer is RAM-only and optional
+   (`privacy.typing_buffer`). Never log typed text, clipboard contents, or the
+   LLM `api_token`.
 7. **Do not auto-enable systemd user service on install** (PLAN §8).
 8. **User-facing error texts stay actionable** (e.g. `Run: sudo usermod -aG input $USER`,
    `Are you on KDE Plasma?`). Don't flatten to generic strings.
@@ -197,8 +221,6 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 | **Empty hotkey = disabled** | Esc in Settings clears the binding | `validate()` accepts `""`; `parse_hotkey_bindings` skips empty. |
 | **`HotkeySource::events()` is `take()`** | Second call returns an empty channel | Call once in the daemon loop. Never during `build_services`. |
 | **`key_to_char` maps US physical keys** | Buffer stored Latin (`ghbdtn`) while user typed Russian | Map through `LayoutCharMapper` (current KDE layout + `en_to_ru_map`). |
-| **Accept chords `Ctrl+Alt+1/2/3`** | `Ctrl+1` steals browser tabs if always on | evdev matches them **only while** `bar_visible` is true. |
-| **Suggestion UI** | Floating iced window covered other apps | Removed. Use Plasma widget `org.switchfix.suggestions` in the panel, tray menu, or `Ctrl+Alt+1..N`. |
 | **`key_name_to_code` returns `evdev::KeyCode`** | Linux type leak | Keep it private to `platform/linux`. |
 | **SharedTypingBuffer ≠ domain `TypingBuffer`** | Duplicate concepts | Live one is adapters `SharedTypingBuffer`. Do not merge casually; `EvdevOptions.buffer` needs concrete type (`push`/`pop`). |
 | **wl-clipboard-rs** | Was a dead dep (arboard is used) | Removed. `wl-copy`/`wl-paste` are invoked as CLI when present; arboard is the library fallback. |
@@ -207,6 +229,12 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 | **KDE layout set is async** | `setLayout` may not stick immediately | Poll `getLayout` briefly (see `layout.rs`). |
 | **Mixed text `hello мир` → majority direction** | Unmapped chars unchanged | Expected domain behavior, not a bug. |
 | **selftest keyboard `No such device` warnings** | Temporary uinput disappears after test | Harmless. |
+| **`ureq` is blocking** | A synchronous HTTP call inside the async runtime stalls the daemon (no hotkeys, no tray) | `OpenAiCorrector` must call ureq only inside `spawn_blocking`. Never `.send()` on the async thread. |
+| **systemd `RestrictAddressFamilies`** | LLM API is TCP; the old unit allowed only `AF_UNIX AF_NETLINK` → connection fails under systemd but works from a shell | Unit must keep `AF_INET AF_INET6` (see `packaging/systemd/switchfix.service`). |
+| **`OpenAiCorrector` is rebuilt on reload** | A held `Arc<dyn TextCorrector>` keeps the old `base_url`/`system_prompt`/token forever | `wiring::install_text_corrector` rebuilds from `cfg.llm` at startup **and on config reload**. Go through `service.set_text_corrector`, don't cache. |
+| **`WordEvent::Backspace` is ungated** | Undo must work even with `privacy.typing_buffer=false` | `SharedTypingBuffer::pop` emits Backspace regardless of the privacy flag. Don't gate it — `CorrectionService::on_backspace` depends on it. |
+| **LLM token in logs** | `api_token` is a credential | Never log `llm.api_token` (doctor prints `configured/not configured` only). |
+| **`detect_lang` location** | Easy to re-grow spell heuristics in domain | Only `detect_lang` remains (`domain/lang.rs`); used for undo retyping layout. Do not reintroduce spell logic here. |
 
 ---
 
@@ -214,15 +242,10 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 
 | Command | Purpose |
 |---------|---------|
-| `daemon` (default) | Tray + hotkeys + corrections + spellcheck |
+| `daemon` (default) | Tray + hotkeys + convert + LLM-fix |
 | `settings` | iced settings window (separate process) |
 | `convert [--text]` | Pure domain convert (no injection) |
-| `spell [--text]` | Spellcheck a word; prints candidates (layout-convert + dict) |
-| `suggest-peek` | JSON of current suggestions + LLM/stats (for the Plasma widget) |
-| `spell-stats` | LLM/spell counters + recent transform history (JSON) |
-| `suggest-accept N` / `suggest-learn` / `suggest-dismiss` | Control suggestions from CLI/widget |
-| `suggest-bar` | Terminal fallback (prints suggestions; no GUI window) |
-| `doctor` | Diagnostics: platform, groups, uinput, D-Bus, **hotkeys**, sound, **dictionaries** |
+| `doctor` | Diagnostics: platform, groups, uinput, D-Bus, **hotkeys**, sound, **llm api** |
 | `setup [-y]` | Interactive privileged setup (sudo only for root steps) |
 | `toggle` | Flip enabled/paused via temp state file |
 | `reload` | Signal a running daemon to re-read `config.toml` + `maps/` |
@@ -235,29 +258,37 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 
 `AppConfig` in `switchfix-app/src/config.rs` (`Default` + `validate()`):
 
-- `general.enabled_on_start`, `language`
-- `hotkeys.convert_selection / toggle_enabled / fix_spelling / llm_fix_selection`
+- `general.enabled_on_start`, `language`, `tray_icon_style`
+- `hotkeys.convert_selection / toggle_enabled / llm_fix_selection`
   — grammar `ctrl+shift+f1`, `insert`, `capslock`, `home`, … (`HotkeyBinding::parse`)
-  — **empty string = action disabled** (Esc in Settings resets the field)
+  — **empty string = action disabled** (Esc in Settings clears the field)
   — `llm_fix_selection` (default `alt+r`) sends the whole selection to the LLM
-    and replaces it; toggle with `spell.llm_selection` (default `true`).
+    and replaces it (see `[llm]`).
 - `hotkeys.hotkey_consume` (default **true**) — EVIOCGRAB + passthrough
 - `hotkeys.use_portal_hotkeys` — **flag only, not implemented**
-- `behavior.copy_settle_ms`, `behavior.paste_settle_ms`
-- `behavior.terminal_apps` — app ids that use terminal paste (auto, no separate hotkey)
+- `behavior.capture_mode`, `behavior.replace_strategy`
+- `behavior.restore_clipboard`, `behavior.copy_settle_ms`, `behavior.paste_settle_ms`
+- `behavior.terminal_paste_combo`, `behavior.terminal_erase`
+  — terminal mode: Ctrl+A / Ctrl+K / paste combo, no separate hotkey
+- `behavior.terminal_apps` — app ids that use terminal paste (auto)
 - `behavior.excluded_apps` — never correct here (keepassxc, …)
 - `behavior.disable_in_fullscreen` (default **true**) — skip games / fullscreen video
-- `privacy.typing_buffer`, `privacy.typing_buffer_max_keys`
+- `privacy.typing_buffer`, `privacy.typing_buffer_max_keys`, `privacy.log_text_content`
 - `layouts.active` — KDE short ids `["us","ru"]`
-- `spell.enabled`, `spell.mode` (`off|hint|hotkey|auto`)
-- `spell.backend` (`dict`|`hybrid`|`auto`) — hybrid adds edit-1/confusable neighbors + optional context engine
-- `spell.lt_url` (LanguageTool HTTP, e.g. `http://127.0.0.1:8010`), `spell.llm_cmd` (JSON stdin/stdout corrector)
-- `spell.context_chars` (how much typed tail is sent as context)
-- `spell.debounce_ms` (default 180) — pause after Space before spell-check so a replace never tears the next word
-- Hybrid LLM: `crates/switchfix-llm` (native llama.cpp, no Python). `switchfix-llm pull` downloads GGUF into `~/.local/share/switchfix/models/llm/`. Set `llm_cmd = "switchfix-llm"`. Models: `qwen2.5-0.5b-instruct-q4_0` (~409 MB), `smollm2-135m-instruct-q4_k_m` (~100 MB).
-- `spell.languages` (`["ru","en"]`), `spell.min_word_len`, `spell.completion_min_chars`
-- `spell.suggest_count`, `spell.bar_position`, `spell.bar_timeout_ms`
-- `spell.auto_fix_min_len`, `spell.sound` (short signal on word replace)
+- `[llm]` — LLM-fix selection:
+  - `enabled` (default `true`) — master switch for the hotkey
+  - `base_url` — OpenAI-compatible server root (e.g. `https://api.openai.com`,
+    `http://127.0.0.1:11434` for Ollama). Client POSTs
+    `{base_url}/v1/chat/completions`. **Empty = feature off.**
+  - `api_token` — Bearer token; empty = no `Authorization` header (local servers)
+  - `system_prompt` — first system message (default in Russian: fix
+    orthography/grammar/punctuation, return only corrected text)
+  - `model` — optional model id (`gpt-4o-mini`, `qwen2.5:0.5b`, …);
+    empty = omit the `model` field
+  - `timeout_ms` — default `15000`, valid `500..=120000`
+
+Old `[spell]` tables in existing configs are **ignored** (unknown section).
+`llm.base_url` without scheme is rejected by `validate()`.
 
 Settings UI: click field → press combo → saved; Esc **clears** the binding;
 checkboxes Ctrl/Alt/Shift/Meta force modifiers; while capturing a
@@ -269,8 +300,9 @@ Footer actions:
   running, the flag is ignored (start `switchfix daemon` to pick the config up).
 - **«Редактировать конфиг»** — `xdg-open ~/.config/switchfix/` (`config.toml` + `maps/`).
 - **«Перезагрузить конфиг»** — re-reads the form from disk and writes
-  `$TMPDIR/switchfix.reload`; the daemon applies `config` + maps within ~2 s.
-  **Hotkeys still require Save (or a daemon restart).**
+  `$TMPDIR/switchfix.reload`; the daemon applies `config` + maps (+ rebuilds the
+  `OpenAiCorrector`) within ~2 s. **Hotkeys still require Save (or a daemon
+  restart).**
 
 ### Layout maps (`~/.config/switchfix/maps/`)
 
@@ -280,8 +312,8 @@ overwritten; deleted files are not restored. Invalid JSON is skipped with a
 warning; if nothing loads, the built-in EN↔RU table is used.
 
 Helpers: `switchfix_adapters::{seed_default_maps, load_conversion_set}` in
-`platform/portable/maps.rs`. `CorrectionService::replace_tables` /
-`SpellService::replace_tables` swap tables on reload.
+`platform/portable/maps.rs`. `CorrectionService::replace_tables` swaps tables
+on reload.
 
 ---
 
@@ -289,16 +321,17 @@ Helpers: `switchfix_adapters::{seed_default_maps, load_conversion_set}` in
 
 | Kind | Where | Notes |
 |------|-------|-------|
-| Domain unit | `switchfix-domain` | conversion, buffer, maps, spell heuristics |
-| App unit | `switchfix-app` | hotkey parse, config validate, correction, **spell service** (inline fakes) |
-| Adapter unit | `switchfix-adapters` | config_store tempfile, detect/factory, parse_hotkey_bindings, **zspell** |
-| Integration order | `switchfix-tests/tests/scenarios.rs` | 10 order-sensitive scenarios + shared event-log fakes |
+| Domain unit | `switchfix-domain` | conversion, buffer, maps, `detect_lang` |
+| App unit | `switchfix-app` | hotkey parse, config validate, correction, **LLM undo** (`llm_undo_*` in `correction.rs`) |
+| Adapter unit | `switchfix-adapters` | config_store tempfile, detect/factory, parse_hotkey_bindings, `OpenAiCorrector` |
+| Integration order | `switchfix-tests/tests/scenarios.rs` | order-sensitive scenarios + shared event-log fakes |
 | UI unit | `switchfix-ui` | combo formatting |
 | Live (ignored) | `kde/layout.rs` | `live_kde_layout_roundtrip` |
 | Live CLI | `switchfix selftest` | uinput inject → evdev match |
 
-**Manual matrix:** `docs/MANUAL-TEST-MATRIX.md` (M1–M22) on Kate / Firefox /
-Konsole / Telegram / VS Code. Include hotkey consume leak-check and spell bar.
+**Manual matrix:** `docs/MANUAL-TEST-MATRIX.md` (convert M1–M14 + LLM-fix /
+undo rows) on Kate / Firefox / Konsole / Telegram / VS Code. Include hotkey
+consume leak-check.
 
 **Simulating keys (for intercept tests):**
 ```bash
@@ -312,14 +345,17 @@ Watch `RUST_LOG=debug` for `evdev key …` / `hotkey match` / `hotkey received`.
 
 ## Packaging
 
-- `packaging/systemd/switchfix.service` — user unit (do **not** enable on install)
+- `packaging/systemd/switchfix.service` — user unit (do **not** enable on
+  install). `RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6`
+  (TCP is required for the optional LLM API).
 - `packaging/systemd/99-switchfix-uinput.rules` — uinput group/mode
 - `packaging/desktop/switchfix.desktop` — KDE autostart bits
 - `packaging/install.sh`, `packaging/build-deb.sh` → `target/switchfix_0.1.0_amd64.deb`
 - `assets/maps/en2ru.json`, `ru2en.json`, `assets/icons/switchfix.svg`
 
-Docs: `docs/PLAN.md`, `PRIVACY.md`, `SECURITY.md`, `MANUAL-TEST-MATRIX.md`,
-`PLASMA6-WIDGETS.md` (plasmoid API + landmines).
+No plasmoid ships; DEBIAN control has **no hunspell recommends** (dictionaries
+are gone). Docs: `docs/PLAN.md`, `PRIVACY.md`, `SECURITY.md`,
+`MANUAL-TEST-MATRIX.md`.
 
 ---
 
@@ -346,7 +382,7 @@ A: Hybrid GPU + Wayland wgpu panic. We force `WGPU_BACKEND=gl`. Don't remove.
 **Q: I changed a hotkey in Settings but it still uses the old one.**  
 A: Press «Сохранить» — the daemon re-execs itself and rebinds hotkeys
 (~0.5 s). If the daemon wasn't running, start it. «Перезагрузить конфиг»
-only soft-reloads maps/config, not hotkeys.
+only soft-reloads maps/config (and the LLM corrector), not hotkeys.
 
 **Q: How do I change the layout map / terminal app list?**  
 A: Settings → «Редактировать конфиг» → edit `maps/en2ru.json` (MapFile schema)
@@ -358,14 +394,35 @@ afterwards unless you meant to.
 
 **Q: Reload button does nothing.**  
 A: Daemon polls `$TMPDIR/switchfix.reload` every ~2 s. Check
-`RUST_LOG=info` for `config reloaded` / `layout maps reloaded`. No daemon
-running = only the Settings form is refreshed.
+`RUST_LOG=info` for `config reloaded` / `layout maps reloaded` /
+`text corrector rebuilt`. No daemon running = only the Settings form is refreshed.
 
-**Q: Spellcheck does nothing / no bar.**  
-A: (1) `switchfix doctor` → `spell dictionaries` must show `loaded [ru, en]`.
-If FAIL: `sudo apt install hunspell-ru hunspell-en-us`. (2) `spell.mode` must not
-be `off`. (3) `switchfix spell --text 'приветт'` proves the dictionary path.
-(4) Bar is a separate process — `pgrep -af suggest-bar`.
+**Q: LLM-fix does nothing / “LLM-исправление недоступно”.**  
+A: (1) `switchfix doctor` → `llm api` must show `configured`. If
+`not configured`, set `[llm] base_url` (and `api_token` if the server needs one)
+— empty `base_url` turns the feature off. (2) `llm.enabled` must be `true`.
+(3) Empty selection = no network call and no replace (by design). (4) Errors
+(`bad token`, unreachable host) notify «LLM не ответил — текст не изменён» and
+leave the text unchanged.
+
+**Q: LLM-fix works in a shell but fails under systemd.**  
+A: The user unit sandboxes address families. `RestrictAddressFamilies` must
+include `AF_INET AF_INET6` for the LLM TCP call — see
+`packaging/systemd/switchfix.service`.
+
+**Q: I replaced text with the LLM and want it back.**  
+A: Press **Backspace once within ~4 s** — the whole replace is undone and the
+original text is restored. If you type anything else first, the undo is
+cancelled; after ~4 s Backspace is a normal Backspace. Undo works even with
+`privacy.typing_buffer=false`.
+
+**Q: How do I point the LLM at a local server / different model?**  
+A: `[llm] base_url` is the server root — the client POSTs
+`{base_url}/v1/chat/completions` (works with Ollama at
+`http://127.0.0.1:11434`, llama.cpp server, OpenAI, …). Set `model` to the id
+your server expects (empty = omit the field) and `system_prompt` to taste.
+«Перезагрузить конфиг» (or Save) rebuilds the corrector — no daemon restart
+needed for these fields.
 
 **Q: `ctrl+alt+r` doesn't trigger but `insert` does.**  
 A: Your `config.toml` has a custom `convert_selection`. `doctor` prints the
@@ -373,8 +430,8 @@ live bindings. Defaults ≠ current config.
 
 **Q: How do I know the program received my keypress?**  
 A: Tray icon flashes amber, sound plays, log shows `hotkey received: …`.
-If the correction itself fails (e.g. empty selection), you still get the flash —
-that proves intercept works.
+During an LLM call the icon blinks yellow. If the correction itself fails
+(e.g. empty selection), you still get the flash — that proves intercept works.
 
 **Q: `selftest` FAIL on `hotkey intercept`.**  
 A: Without group `input`, it fails at `open event*` first. With the group:
@@ -406,6 +463,9 @@ A: Pure logic → domain. Orchestration → app service + ports. OS calls →
 
 ## Privacy
 
-No network, no keylogging persistence. Keystroke buffer is RAM-only and optional.
+No telemetry, no keylogging persistence. Keystroke buffer is RAM-only and
+optional. The only network traffic is the **user-configured LLM endpoint**
+(`llm.base_url`): on the `llm_fix_selection` hotkey the current selection is
+sent to that endpoint and nothing else. Empty `base_url` = no network at all.
 Group `input` is required for global hotkeys / uinput — documented risk,
 see `docs/PLAN.md` §9, `docs/PRIVACY.md`, `docs/SECURITY.md`.

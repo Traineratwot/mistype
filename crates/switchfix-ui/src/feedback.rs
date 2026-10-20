@@ -14,7 +14,7 @@ pub fn play_hotkey_sound() {
     play_sound("message");
 }
 
-/// Short signal after a word is corrected (spell-fix / auto-fix / accept).
+/// Short signal after a text replacement (LLM fix / undo).
 pub fn play_fix_sound() {
     play_sound("complete");
 }
@@ -24,11 +24,11 @@ fn play_sound(event_id: &str) {
     let candidates: &[(&str, &[&str])] = &[
         (
             "canberra-gtk-play",
-            &["-i", event_id, "-d", "switchfix-spell"],
+            &["-i", event_id, "-d", "switchfix"],
         ),
         (
             "canberra-gtk-play",
-            &["-i", "message", "-d", "switchfix-spell"],
+            &["-i", "message", "-d", "switchfix"],
         ),
         (
             "paplay",
