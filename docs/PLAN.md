@@ -1,10 +1,10 @@
-# SwitchFix — план разработки
+# Mistype — план разработки
 
 Tray-утилита для **Kubuntu (Debian + KDE Plasma 6, Wayland-only MVP)**: конвертация текста «не той раскладкой» + переключение системной раскладки.
 
 | Решение | Значение |
 |---------|----------|
-| Рабочее имя | `switchfix` (переименуемо) |
+| Рабочее имя | `mistype` (переименуемо) |
 | Стек | **Rust** + iced (settings) + ksni (tray) + zbus + evdev/uinput |
 | Режим MVP | **Горячая клавиша** (не auto-Punto) |
 | Scope MVP | Раскладка EN↔RU + layout switch + tray + settings |
@@ -65,13 +65,13 @@ Tray-утилита для **Kubuntu (Debian + KDE Plasma 6, Wayland-only MVP)**
 | Capture | **evdev** | Глобальный буфер + хоткеи под Wayland | AT-SPI (хрупко) |
 | Inject | **uinput** (`evdev` crate) | Ядерная vkeyboard, не блокируется Wayland | wtype/ydotool/XTest |
 | Clipboard | `wl-clipboard-rs` (+ `arboard`) | save/put/get/restore | — |
-| Конфиг | `serde`+`toml` `~/.config/switchfix/` | Человекочитаемо | KConfig |
+| Конфиг | `serde`+`toml` `~/.config/mistype/` | Человекочитаемо | KConfig |
 | Спеллинг (P2) | ~~zspell~~ **removed from scope** | — заменено внешним LLM API (`[llm]`) | LanguageTool, hunspell FFI |
 | Упаковка | `.deb` + systemd user | Kubuntu-first | Flatpak (усложняет /dev) |
 
 **Паттерн процессов (снимает конфликт iced ↔ ksni):**
-- `switchfix daemon` — tray + hotkeys + конвертация (long-running)
-- `switchfix settings` — отдельный процесс окна настроек
+- `mistype daemon` — tray + hotkeys + конвертация (long-running)
+- `mistype settings` — отдельный процесс окна настроек
 
 **Crate-лист MVP:** `zbus`, `tokio`, `ksni`, `iced`, `evdev`, `tokio-udev`, `wl-clipboard-rs`, `arboard`, `serde`, `toml`, `dirs`, `thiserror`, `tracing`, `clap`.
 
@@ -91,7 +91,7 @@ Tray-утилита для **Kubuntu (Debian + KDE Plasma 6, Wayland-only MVP)**
 
 Pass-through (не consume) + settle-delay; опция `hotkey_consume` (EVIOCGRAB) — не дефолт.
 
-**Fallback без `input`:** portal → tray menu / `switchfix convert` CLI.
+**Fallback без `input`:** portal → tray menu / `mistype convert` CLI.
 
 ### 3.2 Захват текста
 
@@ -164,21 +164,21 @@ Domain — без I/O. App — только traits. Adapters реализуют 
 ### Workspace
 
 ```
-switchfix/
+mistype/
 ├── Cargo.toml
 ├── crates/
-│   ├── switchfix-domain/src/
+│   ├── mistype-domain/src/
 │   │   ├── conversion.rs      # ConversionTable, convert(), detect_direction()
 │   │   ├── buffer.rs          # TypingBuffer, WordSpan
 │   │   ├── model.rs           # LayoutId, CorrectionRequest, CorrectionOutcome
 │   │   ├── state.rs           # CorrectionState
 │   │   └── error.rs
-│   ├── switchfix-app/src/
+│   ├── mistype-app/src/
 │   │   ├── ports.rs           # traits
 │   │   ├── services/{correction,layout,config}.rs
 │   │   ├── commands.rs
 │   │   └── context.rs         # AppContext
-│   ├── switchfix-adapters/src/
+│   ├── mistype-adapters/src/
 │   │   ├── evdev_hotkey.rs    # EvdevHotkeySource
 │   │   ├── evdev_buffer.rs    # EvdevKeystrokeBuffer
 │   │   ├── uinput_injector.rs # UinputInjector
@@ -186,11 +186,11 @@ switchfix/
 │   │   ├── wl_clipboard.rs    # WaylandClipboard
 │   │   ├── portal_hotkey.rs   # PortalHotkeySource
 │   │   └── toml_config.rs
-│   ├── switchfix-ui/src/
+│   ├── mistype-ui/src/
 │   │   ├── tray.rs            # ksni
 │   │   ├── settings_app.rs    # iced
 │   │   └── pages/             # General, Hotkeys, Layouts, Privacy, About
-│   └── switchfix-daemon/src/
+│   └── mistype-daemon/src/
 │       ├── main.rs            # clap: daemon|settings|convert|doctor|toggle
 │       ├── wiring.rs          # composition root
 │       └── doctor.rs
@@ -200,7 +200,7 @@ switchfix/
 └── docs/{PRIVACY,SECURITY,MANUAL-TEST-MATRIX}.md
 ```
 
-### Порты (`switchfix-app/src/ports.rs`)
+### Порты (`mistype-app/src/ports.rs`)
 
 ```rust
 TextInjector:     backspace(n), type_text(text, layout), chord(combo)
@@ -325,7 +325,7 @@ When the focused app matches `behavior.terminal_apps`, ConvertSelection uses
 ### Toggle / Settings / Quit
 
 - **Toggle:** `enabled=!enabled`, icon update, `buffer.clear()` (privacy), notify.
-- **Settings:** spawn `switchfix settings` (iced, отдельный процесс); Save → daemon auto-restart (re-exec).
+- **Settings:** spawn `mistype settings` (iced, отдельный процесс); Save → daemon auto-restart (re-exec).
 - **Quit:** cancel token → join hotkey → drop uinput → D-Bus unsubscribe → exit.
 
 ### State machine
@@ -366,15 +366,15 @@ Idle → Capturing → Converting → Replacing → SwitchingLayout
 
 ## 8. Упаковка (Kubuntu)
 
-**.deb:** `/usr/bin/switchfix`, desktop entry, icons, `/usr/lib/systemd/user/switchfix.service`, maps, PRIVACY/SECURITY.
+**.deb:** `/usr/bin/mistype`, desktop entry, icons, `/usr/lib/systemd/user/mistype.service`, maps, PRIVACY/SECURITY.
 
-**postinst:** подсказка `sudo usermod -aG input $USER` + `systemctl --user enable --now switchfix` (не включать автоматически).
+**postinst:** подсказка `sudo usermod -aG input $USER` + `systemctl --user enable --now mistype` (не включать автоматически).
 
 **udev (опц.):** `KERNEL=="uinput", GROUP="input", MODE="0660"`.
 
 **systemd user unit:** `PartOf=graphical-session.target`, `Restart=on-failure`, `NoNewPrivileges`, `ProtectSystem=strict`, `RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6` (TCP — только для optional LLM API).
 
-**Dev:** `cargo build --release && cargo test && ./packaging/install.sh && switchfix doctor`.
+**Dev:** `cargo build --release && cargo test && ./packaging/install.sh && mistype doctor`.
 
 ---
 
@@ -389,7 +389,7 @@ Idle → Capturing → Converting → Replacing → SwitchingLayout
 | Группа `input` | Документируем риск в SECURITY.md; альтернатива — portal (без буфера) |
 | Лицензия | MIT |
 
-UX-строка Settings→Privacy: «SwitchFix не отправляет данные в сеть и не сохраняет введённый текст…»
+UX-строка Settings→Privacy: «Mistype не отправляет данные в сеть и не сохраняет введённый текст…»
 
 ---
 
@@ -407,11 +407,11 @@ UX-строка Settings→Privacy: «SwitchFix не отправляет дан
 | Курсор не в конце слова | Word-path только «с конца»; selection — на месте |
 
 **Открытые вопросы:**
-1. Имя продукта (`switchfix` / `klavafix` / `layoutfix`).
+1. Имя продукта (`mistype` / `klavafix` / `layoutfix`).
 2. Дефолт `privacy.typing_buffer`: on (удобно) vs off (строже) — предлагаю **on** + тумблер.
 3. Mixed text: конвертить только «чужую» часть (по `detect_direction`).
 4. Лицензия MIT vs Apache-2.0.
-5. Single-instance lock (D-Bus name `org.switchfix.Daemon`).
+5. Single-instance lock (D-Bus name `org.mistype.Daemon`).
 6. Поддержка GlobalShortcuts portal кастомных chords (Ctrl+F1) на xdg-desktop-portal-kde — спайк.
 
 ---
@@ -420,17 +420,17 @@ UX-строка Settings→Privacy: «SwitchFix не отправляет дан
 
 | Путь | Роль |
 |------|------|
-| `crates/switchfix-domain/src/conversion.rs` | LayoutMap, convert |
-| `crates/switchfix-domain/src/buffer.rs` | TypingBuffer |
-| `crates/switchfix-domain/src/state.rs` | CorrectionState |
-| `crates/switchfix-app/src/ports.rs` | Traits |
-| `crates/switchfix-app/src/services/correction.rs` | CorrectionService |
-| `crates/switchfix-adapters/src/uinput_injector.rs` | TextInjector |
-| `crates/switchfix-adapters/src/kde_layout.rs` | LayoutSwitcher |
-| `crates/switchfix-adapters/src/wl_clipboard.rs` | ClipboardPort |
-| `crates/switchfix-adapters/src/evdev_hotkey.rs` | HotkeySource |
-| `crates/switchfix-daemon/src/{main,wiring,doctor}.rs` | CLI + DI |
-| `crates/switchfix-ui/src/{tray,settings_app}.rs` | UI |
+| `crates/mistype-domain/src/conversion.rs` | LayoutMap, convert |
+| `crates/mistype-domain/src/buffer.rs` | TypingBuffer |
+| `crates/mistype-domain/src/state.rs` | CorrectionState |
+| `crates/mistype-app/src/ports.rs` | Traits |
+| `crates/mistype-app/src/services/correction.rs` | CorrectionService |
+| `crates/mistype-adapters/src/uinput_injector.rs` | TextInjector |
+| `crates/mistype-adapters/src/kde_layout.rs` | LayoutSwitcher |
+| `crates/mistype-adapters/src/wl_clipboard.rs` | ClipboardPort |
+| `crates/mistype-adapters/src/evdev_hotkey.rs` | HotkeySource |
+| `crates/mistype-daemon/src/{main,wiring,doctor}.rs` | CLI + DI |
+| `crates/mistype-ui/src/{tray,settings_app}.rs` | UI |
 | `assets/maps/{en2ru,ru2en}.json` | Таблицы |
 | `packaging/{deb,systemd,desktop}` | Упаковка |
 
@@ -440,9 +440,9 @@ UX-строка Settings→Privacy: «SwitchFix не отправляет дан
 
 1. `cargo test` — unit + fake-port integration.
 2. `cargo run -- daemon` на Kubuntu Wayland → tray icon.
-3. `switchfix doctor` → input group, `/dev/uinput`, D-Bus status.
+3. `mistype doctor` → input group, `/dev/uinput`, D-Bus status.
 4. Ручная матрица M1–M14 в Kate / Firefox / Konsole / Telegram / VS Code.
-5. `journalctl --user -u switchfix -f` — ошибки layout/uinput.
+5. `journalctl --user -u mistype -f` — ошибки layout/uinput.
 6. Clipboard restore: вставить до операции → после → исходное содержимое.
 
 ---
@@ -452,14 +452,14 @@ UX-строка Settings→Privacy: «SwitchFix не отправляет дан
 | # | Задача | Критерий |
 |---|--------|----------|
 | A1 | Workspace + crates | `cargo check` |
-| A2 | ConversionTable EN↔RU + tests | `cargo test -p switchfix-domain` |
+| A2 | ConversionTable EN↔RU + tests | `cargo test -p mistype-domain` |
 | A3 | TypingBuffer + tests | unit green |
 | A4 | Spike D-Bus setLayout/getLayout | работает на Kubuntu |
 | A5 | Spike uinput «привет» в Kate | текст появляется |
 | A6 | Spike clipboard-marker | selection читается |
 | A7–A8 | KdeLayoutSwitcher, UinputInjector | smoke |
 | A9 | CorrectionService last word | integration fakes |
-| A10 | `switchfix doctor` | статусы |
+| A10 | `mistype doctor` | статусы |
 | A11–A12 | tray + settings заглушки | иконка, окно |
 
 ## Приложение B — Карта EN↔RU (QWERTY ↔ ЙЦУКЕН)

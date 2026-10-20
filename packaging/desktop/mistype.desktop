@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Mistype
+GenericName=Keyboard layout fixer
+Comment=Fix text typed in the wrong keyboard layout (EN↔RU)
+Comment[ru]=Исправляет текст, набранный не той раскладкой (EN↔RU)
+Exec=mistype daemon
+Icon=mistype
+Terminal=false
+Categories=Utility;Qt;KDE;
+Keywords=keyboard;layout;switch;punto;раскладка;клавиатура;
+StartupNotify=false
+X-KDE-autostart-after=panel
+X-DBUS-StartupType=Unique

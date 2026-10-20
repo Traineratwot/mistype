@@ -1,0 +1,28 @@
+[package]
+name = "mistype-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mistype daemon, CLI and composition root"
+
+[[bin]]
+name = "mistype"
+path = "src/main.rs"
+
+[dependencies]
+mistype-domain = { workspace = true }
+mistype-app = { workspace = true }
+mistype-adapters = { workspace = true }
+mistype-ui = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+async-trait = { workspace = true }
+dirs = { workspace = true }
+serde_json = { workspace = true }
+arboard = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { workspace = true }

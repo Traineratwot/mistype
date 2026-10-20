@@ -1,0 +1,29 @@
+[package]
+name = "mistype-adapters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "OS adapters: platform modules (evdev, uinput, KDE D-Bus, clipboard, config)"
+
+[dependencies]
+mistype-domain = { workspace = true }
+mistype-app = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+dirs = { workspace = true }
+arboard = { workspace = true }
+uuid = { workspace = true }
+ureq = { version = "2", default-features = false, features = ["json", "tls"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { workspace = true }
+evdev = { workspace = true }
+futures-lite = "2"
+
+[dev-dependencies]
+tempfile = "3"

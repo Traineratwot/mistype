@@ -2,9 +2,9 @@
 
 ## Threat model (MVP)
 
-SwitchFix runs as the logged-in user and needs low-level input access. The
+Mistype runs as the logged-in user and needs low-level input access. The
 threat we care about: **a local attacker or a compromised process abusing
-SwitchFix to exfiltrate typed text**. The threat we explicitly do not defend
+Mistype to exfiltrate typed text**. The threat we explicitly do not defend
 against: a compromised kernel or a root attacker.
 
 ## Capabilities
@@ -20,14 +20,14 @@ against: a compromised kernel or a root attacker.
 ## Known limitations
 
 1. **Group `input` is powerful.** Membership allows any `input`-group process to
-   read raw key events. SwitchFix itself only keeps a short RAM buffer and does
+   read raw key events. Mistype itself only keeps a short RAM buffer and does
    not log text by default. If this is unacceptable:
    - remove yourself from `input`, and
    - set `hotkeys.use_portal_hotkeys = true` (XDG GlobalShortcuts portal — no raw
      input access, no keystroke buffer; last-word mode becomes unavailable).
 2. **uinput injection** can type arbitrary text as the user. The daemon only
    injects the converted string and a fixed set of chords (Ctrl+V, Ctrl+Insert,
-   …). A compromised `switchfix` binary could inject anything — treat the
+   …). A compromised `mistype` binary could inject anything — treat the
    binary like any other input-sensitive tool (verify package checksums).
 3. **Clipboard races.** Another clipboard manager may observe or replace the
    marker / converted text during the settle window (`copy_settle_ms` /

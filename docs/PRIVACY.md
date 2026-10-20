@@ -1,6 +1,6 @@
 # Privacy
 
-SwitchFix is designed so that fixing a typo never turns into surveillance.
+Mistype is designed so that fixing a typo never turns into surveillance.
 
 ## Principles
 
@@ -8,10 +8,10 @@ SwitchFix is designed so that fixing a typo never turns into surveillance.
 |-----------|----------------------|
 | Not a keylogger | The keystroke buffer exists only in RAM (≤ 256 keys by default), is opt-in, and is dropped on exit / pause. Typed text is **never** written to disk or logs. |
 | Network only when you ask | No telemetry, no analytics. The only outbound network call is the optional **LLM-fix selection** request to the OpenAI-compatible endpoint **you** configure. |
-| Clipboard is borrowed, not kept | Before reading a selection SwitchFix saves the current clipboard, uses a unique marker, then restores the snapshot after paste. Non-text clipboard content is not restored (documented limitation). |
+| Clipboard is borrowed, not kept | Before reading a selection Mistype saves the current clipboard, uses a unique marker, then restores the snapshot after paste. Non-text clipboard content is not restored (documented limitation). |
 | Password fields | Exclude list (`behavior.excluded_apps`, default KeepassXC / KWalletManager) plus a documentation warning: do not press the hotkey in password fields. |
 | Group `input` is a trade-off | Global hotkeys and uinput injection require membership in `input`. The risk is documented in [SECURITY.md](SECURITY.md). |
-| Config is local | `~/.config/switchfix/config.toml` — plain TOML, no cloud sync. The LLM API token lives here (recommend `chmod 600`). |
+| Config is local | `~/.config/mistype/config.toml` — plain TOML, no cloud sync. The LLM API token lives here (recommend `chmod 600`). |
 
 ## What leaves the process
 
@@ -38,8 +38,8 @@ Other IPC (always local):
 | Keystroke buffer (last N chars) | RAM | Until convert, pause, exit, or overflow |
 | Saved clipboard snapshot | RAM | Duration of one conversion |
 | Undo target (original + replacement) | RAM | ~4 seconds after an LLM replace, or until the next key |
-| LLM-fix history (last 30 from/to pairs) | `/tmp/switchfix.llm-history.json` | Until reboot or tmp cleanup. Used by the Plasma widget; click-to-copy only. |
-| Config (incl. LLM token) | `~/.config/switchfix/config.toml` | Until you delete it |
+| LLM-fix history (last 30 from/to pairs) | `/tmp/mistype.llm-history.json` | Until reboot or tmp cleanup. Used by the Plasma widget; click-to-copy only. |
+| Config (incl. LLM token) | `~/.config/mistype/config.toml` | Until you delete it |
 | Logs | journald (optional) | Never include typed text (`privacy.log_text_content = false`, default). Never include the API token. |
 
 ## Settings → Privacy
@@ -54,4 +54,4 @@ Other IPC (always local):
 - `privacy.typing_buffer = false` — disable the keystroke buffer entirely (LLM Backspace-undo still works).
 - `privacy.typing_buffer_max_keys` — shrink the RAM window (default 256).
 - `privacy.log_text_content` — keep **false** unless you are debugging; when true, logs may contain converted text.
-- Uninstall / purge removes the package; delete `~/.config/switchfix/` to remove all local state (including the token).
+- Uninstall / purge removes the package; delete `~/.config/mistype/` to remove all local state (including the token).

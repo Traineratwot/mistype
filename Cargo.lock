@@ -2303,6 +2303,95 @@ dependencies = [
 ]
 
 [[package]]
+name = "mistype-adapters"
+version = "2.0.0"
+dependencies = [
+ "arboard",
+ "async-trait",
+ "dirs 6.0.0",
+ "evdev",
+ "futures-lite",
+ "mistype-app",
+ "mistype-domain",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml",
+ "tracing",
+ "ureq",
+ "uuid",
+ "zbus 5.19.0",
+]
+
+[[package]]
+name = "mistype-app"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "mistype-domain",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "mistype-daemon"
+version = "2.0.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "async-trait",
+ "clap 4.6.7",
+ "dirs 6.0.0",
+ "mistype-adapters",
+ "mistype-app",
+ "mistype-domain",
+ "mistype-ui",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zbus 5.19.0",
+]
+
+[[package]]
+name = "mistype-domain"
+version = "2.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "mistype-tests"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "mistype-app",
+ "mistype-domain",
+ "tokio",
+]
+
+[[package]]
+name = "mistype-ui"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "iced",
+ "ksni",
+ "mistype-app",
+ "mistype-domain",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3758,95 +3847,6 @@ dependencies = [
  "skrifa",
  "yazi",
  "zeno",
-]
-
-[[package]]
-name = "switchfix-adapters"
-version = "1.2.0"
-dependencies = [
- "arboard",
- "async-trait",
- "dirs 6.0.0",
- "evdev",
- "futures-lite",
- "serde",
- "serde_json",
- "switchfix-app",
- "switchfix-domain",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "toml",
- "tracing",
- "ureq",
- "uuid",
- "zbus 5.19.0",
-]
-
-[[package]]
-name = "switchfix-app"
-version = "1.2.0"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "switchfix-domain",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "switchfix-daemon"
-version = "1.2.0"
-dependencies = [
- "anyhow",
- "arboard",
- "async-trait",
- "clap 4.6.7",
- "dirs 6.0.0",
- "serde_json",
- "switchfix-adapters",
- "switchfix-app",
- "switchfix-domain",
- "switchfix-ui",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "zbus 5.19.0",
-]
-
-[[package]]
-name = "switchfix-domain"
-version = "1.2.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "switchfix-tests"
-version = "1.2.0"
-dependencies = [
- "async-trait",
- "switchfix-app",
- "switchfix-domain",
- "tokio",
-]
-
-[[package]]
-name = "switchfix-ui"
-version = "1.2.0"
-dependencies = [
- "async-trait",
- "iced",
- "ksni",
- "serde_json",
- "switchfix-app",
- "switchfix-domain",
- "tokio",
- "tracing",
 ]
 
 [[package]]

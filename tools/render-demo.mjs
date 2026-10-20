@@ -4,7 +4,7 @@
  * Seeks window.__seek(t) per frame, screenshots, encodes with ffmpeg.
  *
  * Usage:
- *   node tools/render-demo.mjs [--fps 30] [--width 1920] [--height 1080] [--out demo/switchfix-demo.mp4]
+ *   node tools/render-demo.mjs [--fps 30] [--width 1920] [--height 1080] [--out demo/mistype-demo.mp4]
  */
 import { chromium } from 'playwright';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
@@ -13,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const htmlPath = path.join(root, 'demo', 'switchfix-demo.html');
+const htmlPath = path.join(root, 'demo', 'mistype-demo.html');
 
 function arg(name, dflt) {
   const i = process.argv.indexOf('--' + name);
@@ -23,7 +23,7 @@ function arg(name, dflt) {
 const FPS = Number(arg('fps', '30'));
 const WIDTH = Number(arg('width', '1920'));
 const HEIGHT = Number(arg('height', '1080'));
-const outMp4 = path.resolve(root, arg('out', 'demo/switchfix-demo.mp4'));
+const outMp4 = path.resolve(root, arg('out', 'demo/mistype-demo.mp4'));
 const framesDir = path.join(root, 'demo', '.frames');
 
 function run(cmd, args) {

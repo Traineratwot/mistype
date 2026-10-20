@@ -4,7 +4,7 @@ set -e
 
 case "$1" in
   purge|remove)
-    systemctl --user disable --now switchfix.service 2>/dev/null || true
+    systemctl --user disable --now mistype.service 2>/dev/null || true
     systemctl --user daemon-reload 2>/dev/null || true
     ;;
 esac

@@ -2,9 +2,9 @@
 
 
 
-# SwitchFix
+# Mistype
 
-**SwitchFix** — утилита в трее для KDE Plasma 6 (Wayland), которая исправляет текст, набранный не той раскладкой (EN↔RU), и может вычищать выделенное предложение через внешний LLM.
+**Mistype** — утилита в трее для KDE Plasma 6 (Wayland), которая исправляет текст, набранный не той раскладкой (EN↔RU), и может вычищать выделенное предложение через внешний LLM.
 
 Аналог Punto Switcher / Keyboop для Kubuntu (Debian + KDE Plasma 6).
 
@@ -12,7 +12,7 @@
 
 ## Демо
 
-Короткое видео (34 с): **[demo/switchfix-demo.mp4](demo/switchfix-demo.mp4)** — что происходит по хоткеям:
+Короткое видео (34 с): **[demo/mistype-demo.mp4](demo/mistype-demo.mp4)** — что происходит по хоткеям:
 
 https://github.com/user-attachments/assets/61396501-9062-437a-9a1e-2c50097079aa
 
@@ -24,8 +24,8 @@ https://github.com/user-attachments/assets/61396501-9062-437a-9a1e-2c50097079aa
 Это анимированный HTML-мокап (не живой скрин). Пересборка:
 
 ```bash
-node tools/render-demo.mjs          # → demo/switchfix-demo.mp4
-# demo/switchfix-demo.html — сцены и тайминг
+node tools/render-demo.mjs          # → demo/mistype-demo.mp4
+# demo/mistype-demo.html — сцены и тайминг
 ```
 
 ---
@@ -37,7 +37,7 @@ node tools/render-demo.mjs          # → demo/switchfix-demo.mp4
 | **Смена раскладки выделенного** | Выделите `ghbdtn` → `Ctrl+Alt+R` → получите `привет`. Системная раскладка переключается автоматически. В терминалах (konsole, kitty, …) — очистка строки + `Ctrl+Shift+V`. |
 | **LLM-исправление выделенного** | Выделите предложение → `Alt+R` → текст уходит в OpenAI-совместимый API и заменяется результатом. **Одна `Backspace` в течение ~4 с полностью отменяет замену.** |
 | **Tray** | Иконка с flash/звуком на хоткей, жёлтое мигание пока LLM думает, пауза/включить, настройки, выход. |
-| **Виджет Plasma** | «SwitchFix LLM» — история запросов с копированием «было / стало» в один клик. |
+| **Виджет Plasma** | «Mistype LLM» — история запросов с копированием «было / стало» в один клик. |
 
 Автозамен при наборе, подсказок, встроенного LLM и словарей **нет** — только явные действия по хоткею.
 
@@ -60,21 +60,29 @@ sudo usermod -aG input "$USER"   # затем перелогиниться
 Debian / Ubuntu / Kubuntu — готовый deb-репозиторий на GitHub Pages:
 
 ```bash
-echo "deb [trusted=yes] https://traineratwot.github.io/switchfix ./" \
-  | sudo tee /etc/apt/sources.list.d/switchfix.list
+echo "deb [trusted=yes] https://traineratwot.github.io/mistype ./" \
+  | sudo tee /etc/apt/sources.list.d/mistype.list
 sudo apt update
-sudo apt install switchfix
+sudo apt install mistype
 ```
 
 Затем:
 
 ```bash
-switchfix setup      # группа input + udev (sudo только если нужно)
-switchfix doctor     # диагностика
-systemctl --user enable --now switchfix.service   # автозапуск демона (по желанию)
+mistype setup      # группа input + udev (sudo только если нужно)
+mistype doctor     # диагностика
+systemctl --user enable --now mistype.service   # автозапуск демона (по желанию)
 ```
 
-Пакет ставит бинарник, карты раскладок, desktop-файл, systemd user unit, udev-правило и иконку. Страница репозитория: [traineratwot.github.io/switchfix](https://traineratwot.github.io/switchfix).
+Пакет ставит бинарник, карты раскладок, desktop-файл, systemd user unit, udev-правило и иконку. Страница репозитория: [traineratwot.github.io/mistype](https://traineratwot.github.io/mistype).
+
+> **Переход с SwitchFix (до 2.0):** имя пакета и пути изменились.
+> ```bash
+> sudo apt remove switchfix
+> systemctl --user disable --now switchfix.service 2>/dev/null || true
+> mkdir -p ~/.config/mistype && cp -a ~/.config/switchfix/. ~/.config/mistype/ 2>/dev/null || true
+> ```
+> Затем установите `mistype` (см. выше).
 
 ---
 
@@ -83,10 +91,10 @@ systemctl --user enable --now switchfix.service   # автозапуск дем�
 ```bash
 cargo build --release
 
-./target/release/switchfix daemon     # демон в трее (основной режим)
-./target/release/switchfix settings   # окно настроек
-./target/release/switchfix doctor     # диагностика
-./target/release/switchfix selftest   # проверка перехвата хоткеев
+./target/release/mistype daemon     # демон в трее (основной режим)
+./target/release/mistype settings   # окно настроек
+./target/release/mistype doctor     # диагностика
+./target/release/mistype selftest   # проверка перехвата хоткеев
 ```
 
 Установка (иконка, desktop-файл, systemd user unit, udev, виджет):
@@ -98,7 +106,7 @@ make install
 ```
 
 > systemd user service **не включается** автоматически. Включайте сами, если нужно:
-> `systemctl --user enable --now switchfix.service`
+> `systemctl --user enable --now mistype.service`
 
 ---
 
@@ -119,7 +127,7 @@ make install
 
 ## Настройка LLM
 
-В Settings → **«LLM-исправление»** или в `~/.config/switchfix/config.toml`:
+В Settings → **«LLM-исправление»** или в `~/.config/mistype/config.toml`:
 
 ```toml
 [llm]
@@ -148,13 +156,13 @@ timeout_ms = 15000
 
 ## Виджет Plasma
 
-**SwitchFix LLM** — на панели: ПКМ → «Добавить виджеты» → *SwitchFix LLM*.
+**Mistype LLM** — на панели: ПКМ → «Добавить виджеты» → *Mistype LLM*.
 
 - История последних LLM-запросов (было → стало)
 - Тексты укорочены под ширину виджета
 - **«Копировать было» / «Копировать стало»** — в буфер обмена
 
-История: `/tmp/switchfix.llm-history.json` (последние 30, до перезагрузки).
+История: `/tmp/mistype.llm-history.json` (последние 30, до перезагрузки).
 
 ---
 
@@ -162,17 +170,17 @@ timeout_ms = 15000
 
 | Команда | Назначение |
 |---------|------------|
-| `switchfix daemon` | Демон в трее (по умолчанию) |
-| `switchfix settings` | Окно настроек |
-| `switchfix convert --text 'ghbdtn'` | Конвертация без вставки (только печать) |
-| `switchfix llm-history` | JSON истории LLM-запросов |
-| `switchfix llm-copy --index 0 --field to` | Скопировать поле из истории |
-| `switchfix doctor` | Диагностика (группы, uinput, D-Bus, хоткеи, LLM) |
-| `switchfix setup` | Интерактивная настройка (input, udev, сервис) |
-| `switchfix toggle` | Пауза / включить |
-| `switchfix reload` | Перечитать config.toml и maps/ |
-| `switchfix beep` | Проверка звука |
-| `switchfix selftest` | Проверка перехвата хоткеев |
+| `mistype daemon` | Демон в трее (по умолчанию) |
+| `mistype settings` | Окно настроек |
+| `mistype convert --text 'ghbdtn'` | Конвертация без вставки (только печать) |
+| `mistype llm-history` | JSON истории LLM-запросов |
+| `mistype llm-copy --index 0 --field to` | Скопировать поле из истории |
+| `mistype doctor` | Диагностика (группы, uinput, D-Bus, хоткеи, LLM) |
+| `mistype setup` | Интерактивная настройка (input, udev, сервис) |
+| `mistype toggle` | Пауза / включить |
+| `mistype reload` | Перечитать config.toml и maps/ |
+| `mistype beep` | Проверка звука |
+| `mistype selftest` | Проверка перехвата хоткеев |
 
 ---
 

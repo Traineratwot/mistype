@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Mistype: keyboard key with EN↔RU swap -->
+  <rect x="4" y="12" width="56" height="40" rx="8" fill="#2b2e3b"/>
+  <rect x="8" y="16" width="48" height="32" rx="6" fill="#3d4254"/>
+  <!-- left key block (EN) -->
+  <rect x="12" y="22" width="14" height="10" rx="2" fill="#5b9cff"/>
+  <!-- right key block (RU) -->
+  <rect x="38" y="22" width="14" height="10" rx="2" fill="#ff7a59"/>
+  <!-- swap arrows -->
+  <path d="M28 27h8m0 0l-3-3m3 3l-3 3" stroke="#e8eaf0" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M36 37h-8m0 0l3-3m-3 3l3 3" stroke="#e8eaf0" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- bottom bar -->
+  <rect x="16" y="38" width="32" height="6" rx="2" fill="#5a6078"/>
+</svg>

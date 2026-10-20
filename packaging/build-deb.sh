@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a .deb from packaging/deb + target/release/switchfix.
+# Build a .deb from packaging/deb + target/release/mistype.
 # Usage: ./packaging/build-deb.sh [VERSION] [ARCH] [OUTPUT-DIR]
 #   VERSION     e.g. 0.1.0   (default: workspace Cargo.toml version)
 #   ARCH        amd64|arm64  (default: dpkg --print-architecture)
@@ -12,7 +12,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${1:-}"
 ARCH="${2:-}"
 OUT_DIR="${3:-${ROOT}/target}"
-PKG_NAME="switchfix"
+PKG_NAME="mistype"
 
 if [[ -z "$VERSION" ]]; then
   VERSION="$(python3 -c "import tomllib; print(tomllib.load(open('${ROOT}/Cargo.toml','rb'))['workspace']['package']['version'])")"
@@ -40,33 +40,33 @@ mkdir -p \
   "$STAGE/DEBIAN" \
   "$STAGE/usr/bin" \
   "$STAGE/usr/lib/systemd/user" \
-  "$STAGE/usr/share/switchfix/maps" \
+  "$STAGE/usr/share/mistype/maps" \
   "$STAGE/usr/share/applications" \
-  "$STAGE/usr/share/doc/switchfix" \
+  "$STAGE/usr/share/doc/mistype" \
   "$STAGE/usr/share/man/man1" \
   "$STAGE/etc/udev/rules.d"
 
-cp "${ROOT}/target/release/switchfix" "$STAGE/usr/bin/switchfix"
-chmod 0755 "$STAGE/usr/bin/switchfix"
+cp "${ROOT}/target/release/mistype" "$STAGE/usr/bin/mistype"
+chmod 0755 "$STAGE/usr/bin/mistype"
 
-install -m 0644 "${ROOT}/packaging/systemd/switchfix.service" \
-  "$STAGE/usr/lib/systemd/user/switchfix.service"
-install -m 0644 "${ROOT}/packaging/systemd/99-switchfix-uinput.rules" \
-  "$STAGE/etc/udev/rules.d/99-switchfix-uinput.rules"
-install -m 0644 "${ROOT}/packaging/desktop/switchfix.desktop" \
-  "$STAGE/usr/share/applications/switchfix.desktop"
-install -m 0644 "${ROOT}/assets/maps/en2ru.json" "$STAGE/usr/share/switchfix/maps/en2ru.json"
-install -m 0644 "${ROOT}/assets/maps/ru2en.json" "$STAGE/usr/share/switchfix/maps/ru2en.json"
+install -m 0644 "${ROOT}/packaging/systemd/mistype.service" \
+  "$STAGE/usr/lib/systemd/user/mistype.service"
+install -m 0644 "${ROOT}/packaging/systemd/99-mistype-uinput.rules" \
+  "$STAGE/etc/udev/rules.d/99-mistype-uinput.rules"
+install -m 0644 "${ROOT}/packaging/desktop/mistype.desktop" \
+  "$STAGE/usr/share/applications/mistype.desktop"
+install -m 0644 "${ROOT}/assets/maps/en2ru.json" "$STAGE/usr/share/mistype/maps/en2ru.json"
+install -m 0644 "${ROOT}/assets/maps/ru2en.json" "$STAGE/usr/share/mistype/maps/ru2en.json"
 
-if [[ -f "${ROOT}/assets/icons/switchfix.svg" ]]; then
+if [[ -f "${ROOT}/assets/icons/mistype.svg" ]]; then
   mkdir -p "$STAGE/usr/share/icons/hicolor/scalable/apps"
-  install -m 0644 "${ROOT}/assets/icons/switchfix.svg" \
-    "$STAGE/usr/share/icons/hicolor/scalable/apps/switchfix.svg"
+  install -m 0644 "${ROOT}/assets/icons/mistype.svg" \
+    "$STAGE/usr/share/icons/hicolor/scalable/apps/mistype.svg"
 fi
 
 for doc in PRIVACY.md SECURITY.md MANUAL-TEST-MATRIX.md; do
   if [[ -f "${ROOT}/docs/${doc}" ]]; then
-    install -m 0644 "${ROOT}/docs/${doc}" "$STAGE/usr/share/doc/switchfix/${doc}"
+    install -m 0644 "${ROOT}/docs/${doc}" "$STAGE/usr/share/doc/mistype/${doc}"
   fi
 done
 

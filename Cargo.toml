@@ -1,27 +1,27 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/switchfix-domain",
-    "crates/switchfix-app",
-    "crates/switchfix-adapters",
-    "crates/switchfix-ui",
-    "crates/switchfix-daemon",
-    "crates/switchfix-tests",
+    "crates/mistype-domain",
+    "crates/mistype-app",
+    "crates/mistype-adapters",
+    "crates/mistype-ui",
+    "crates/mistype-daemon",
+    "crates/mistype-tests",
 ]
 
 [workspace.package]
-version = "1.2.0"
+version = "2.0.0"
 edition = "2021"
 license = "MIT"
-authors = ["SwitchFix contributors"]
-repository = "https://github.com/switchfix/switchfix"
+authors = ["Mistype contributors"]
+repository = "https://github.com/Traineratwot/mistype"
 description = "Fix text typed in the wrong keyboard layout — Linux/KDE answer to Punto Switcher"
 
 [workspace.dependencies]
-switchfix-domain = { path = "crates/switchfix-domain" }
-switchfix-app = { path = "crates/switchfix-app" }
-switchfix-adapters = { path = "crates/switchfix-adapters" }
-switchfix-ui = { path = "crates/switchfix-ui" }
+mistype-domain = { path = "crates/mistype-domain" }
+mistype-app = { path = "crates/mistype-app" }
+mistype-adapters = { path = "crates/mistype-adapters" }
+mistype-ui = { path = "crates/mistype-ui" }
 
 async-trait = "0.1"
 thiserror = "2"

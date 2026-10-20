@@ -1,14 +1,14 @@
-Package: switchfix
+Package: mistype
 Version: 0.1.0
 Section: utils
 Priority: optional
 Architecture: amd64
 Depends: libc6, libdbus-1-3
 Recommends: policykit-1
-Maintainer: SwitchFix contributors <switchfix@localhost>
-Homepage: https://github.com/switchfix/switchfix
+Maintainer: Mistype contributors <mistype@localhost>
+Homepage: https://github.com/Traineratwot/mistype
 Description: Fix text typed in the wrong keyboard layout (EN↔RU)
- SwitchFix is a KDE Plasma tray utility in the spirit of Punto Switcher /
+ Mistype is a KDE Plasma tray utility in the spirit of Punto Switcher /
  Keyboop. It converts text typed in the wrong keyboard layout, switches the
  system layout, and can fix a selected sentence via an external LLM API.
  .

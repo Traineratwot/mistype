@@ -1,4 +1,4 @@
-# SwitchFix — dev / test helpers
+# Mistype — dev / test helpers
 #
 #   make            # release build
 #   make run        # daemon with debug logs (background, log file)
@@ -9,10 +9,10 @@
 #   make convert W=ghbdtn
 #   make stop | status | restart
 
-BIN        := ./target/release/switchfix
+BIN        := ./target/release/mistype
 CARGO      ?= cargo
-LOG        := /tmp/switchfix-daemon.log
-CONFIG_DIR := $(HOME)/.config/switchfix
+LOG        := /tmp/mistype-daemon.log
+CONFIG_DIR := $(HOME)/.config/mistype
 RUST_LOG   ?= debug
 W          ?= ghbdtn
 
@@ -28,7 +28,7 @@ all: build
 build: ## release build (the binary used by run/doctor/…)
 	$(CARGO) build --release
 
-debug: ## faster unoptimized build → ./target/debug/switchfix
+debug: ## faster unoptimized build → ./target/debug/mistype
 	$(CARGO) build
 
 ## Test / lint
@@ -48,18 +48,18 @@ fmt:
 ## Run daemon
 
 # heartbeat IPC written by the daemon once the main loop is up
-HB         := /tmp/switchfix.daemon.json
+HB         := /tmp/mistype.daemon.json
 START_TMO  := 30   # × 0.1 s to wait for heartbeat
 STOP_TMO   := 20   # × 0.1 s to wait for old daemon exit
 
 run: build ## start daemon in background, logs → $(LOG)
-	@pkill -x switchfix 2>/dev/null || true
-	@i=0; while pgrep -x switchfix >/dev/null && [ $$i -lt $(STOP_TMO) ]; do sleep 0.1; i=$$((i+1)); done
-	@rm -f $(HB) /tmp/switchfix-daemon.pid
+	@pkill -x mistype 2>/dev/null || true
+	@i=0; while pgrep -x mistype >/dev/null && [ $$i -lt $(STOP_TMO) ]; do sleep 0.1; i=$$((i+1)); done
+	@rm -f $(HB) /tmp/mistype-daemon.pid
 	@nohup env RUST_LOG=$(RUST_LOG) $(abspath $(BIN)) daemon >$(LOG) 2>&1 & \
-		echo "$$!" > /tmp/switchfix-daemon.pid
+		echo "$$!" > /tmp/mistype-daemon.pid
 	@i=0; while [ ! -s $(HB) ] && [ $$i -lt $(START_TMO) ]; do sleep 0.1; i=$$((i+1)); done
-	@echo "daemon pid $$(cat /tmp/switchfix-daemon.pid)  log=$(LOG)"
+	@echo "daemon pid $$(cat /tmp/mistype-daemon.pid)  log=$(LOG)"
 	@id -nG | tr ' ' '\n' | grep -qx input \
 		|| echo "(session lacks group 'input' — hotkeys need: sg input -c make run-fg)"
 	@$(MAKE) --no-print-directory status
@@ -70,14 +70,14 @@ run-fg: build ## daemon in foreground (Ctrl+C to stop) — best for debugging
 restart: stop run ## bounce the daemon
 
 stop: ## stop running daemon
-	@pkill -x switchfix 2>/dev/null || true
-	@i=0; while pgrep -x switchfix >/dev/null && [ $$i -lt $(STOP_TMO) ]; do sleep 0.1; i=$$((i+1)); done
-	@pgrep -x switchfix >/dev/null && echo "still running (SIGKILL?)" || echo "stopped"
-	@rm -f /tmp/switchfix-daemon.pid $(HB)
+	@pkill -x mistype 2>/dev/null || true
+	@i=0; while pgrep -x mistype >/dev/null && [ $$i -lt $(STOP_TMO) ]; do sleep 0.1; i=$$((i+1)); done
+	@pgrep -x mistype >/dev/null && echo "still running (SIGKILL?)" || echo "stopped"
+	@rm -f /tmp/mistype-daemon.pid $(HB)
 
 status: ## is the daemon alive?
-	@if ! pgrep -x switchfix >/dev/null; then echo "daemon not running"; exit 1; fi
-	@pgrep -a -x switchfix
+	@if ! pgrep -x mistype >/dev/null; then echo "daemon not running"; exit 1; fi
+	@pgrep -a -x mistype
 	@echo "--- heartbeat ---"
 	@cat $(HB) 2>/dev/null | head -c 400; echo
 
@@ -117,7 +117,7 @@ convert: build ## make convert W=ghbdtn  — layout convert only
 
 clean:
 	$(CARGO) clean
-	rm -f /tmp/switchfix-daemon.pid /tmp/switchfix-daemon.log
+	rm -f /tmp/mistype-daemon.pid /tmp/mistype-daemon.log
 
 # show self-documenting help
 help:

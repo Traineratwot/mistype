@@ -1,0 +1,19 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "mistype@localhost",
+                "Name": "Mistype contributors"
+            }
+        ],
+        "Category": "Utilities",
+        "Description": "LLM-fix request history for Mistype",
+        "Icon": "edit-find-replace",
+        "Id": "org.mistype.llm",
+        "Name": "Mistype LLM",
+        "Version": "0.2.0",
+        "Website": "https://github.com/Traineratwot/mistype"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "KPackageStructure": "Plasma/Applet"
+}

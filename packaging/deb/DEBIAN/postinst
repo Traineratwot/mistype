@@ -1,7 +1,7 @@
 #!/bin/sh
 # postinst — do NOT enable the service automatically (see PLAN.md §8).
 # Runs as root under apt/dpkg, so no sudo password is needed here; interactive
-# privileged fixes live in `switchfix setup` for the end user.
+# privileged fixes live in `mistype setup` for the end user.
 set -e
 
 case "$1" in
@@ -15,22 +15,22 @@ case "$1" in
     fi
 
     cat <<'EOF' >&2
-switchfix: installed.
+mistype: installed.
 
   * Global hotkeys need group 'input'. Fix interactively (asks for sudo
     password only for the steps you confirm):
-        switchfix setup
+        mistype setup
     or manually:
         sudo usermod -aG input $USER    # then log out and back in
 
   * Enable the tray daemon when ready (not enabled automatically):
-        systemctl --user enable --now switchfix
+        systemctl --user enable --now mistype
 
   * Diagnostics:
-        switchfix doctor
+        mistype doctor
 
-  Privacy notes: /usr/share/doc/switchfix/PRIVACY.md
-  Security notes: /usr/share/doc/switchfix/SECURITY.md
+  Privacy notes: /usr/share/doc/mistype/PRIVACY.md
+  Security notes: /usr/share/doc/mistype/SECURITY.md
 EOF
     ;;
 esac
