@@ -1,3 +1,7 @@
+
+
+
+
 # SwitchFix
 
 **SwitchFix** — утилита в трее для KDE Plasma 6 (Wayland), которая исправляет текст, набранный не той раскладкой (EN↔RU), и может вычищать выделенное предложение через внешний LLM.
@@ -9,6 +13,8 @@
 ## Демо
 
 Короткое видео (34 с): **[demo/switchfix-demo.mp4](demo/switchfix-demo.mp4)** — что происходит по хоткеям:
+
+https://github.com/user-attachments/assets/61396501-9062-437a-9a1e-2c50097079aa
 
 1. `Ctrl+Alt+R` — `ghbdtn vbh` → `привет мир`
 2. `Alt+R` — LLM-чистка выделенного (трей мигает жёлтым)
