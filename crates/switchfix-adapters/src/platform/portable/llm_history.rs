@@ -99,6 +99,13 @@ pub fn write_llm_status(enabled: bool, busy: bool) {
     st.enabled = enabled;
     st.busy = busy;
     write_status(&st);
+    write_llm_busy_flag(busy);
+}
+
+/// Tiny 0/1 file the KWin busy script watches (`/tmp/switchfix.llm-busy`).
+pub fn write_llm_busy_flag(busy: bool) {
+    let path = std::env::temp_dir().join("switchfix.llm-busy");
+    let _ = std::fs::write(&path, if busy { "1" } else { "0" });
 }
 
 /// Refresh liveness/enabled without touching the busy flag (periodic tick).
@@ -127,6 +134,13 @@ pub fn append_llm_history(entry: LlmHistoryEntry) {
 /// Newest-first history only.
 pub fn read_llm_history() -> Vec<LlmHistoryEntry> {
     read_llm_status().history
+}
+
+/// Drop all history entries; keep pid/enabled/busy/updated.
+pub fn clear_llm_history() {
+    let mut st = read_llm_status();
+    st.history.clear();
+    write_status(&st);
 }
 
 /// True when a daemon has written the file recently (widget-friendly).

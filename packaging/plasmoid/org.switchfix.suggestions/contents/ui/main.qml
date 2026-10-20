@@ -167,6 +167,15 @@ PlasmoidItem {
                 opacity: 0.6
                 text: root.count > 0 ? i18n("%1", root.count) : ""
             }
+            PlasmaComponents.ToolButton {
+                visible: root.count > 0
+                text: i18n("Очистить")
+                icon.name: "edit-clear"
+                onClicked: {
+                    runner.connectSource("sh -c 'switchfix llm-history-clear 2>/dev/null || echo {} > /tmp/switchfix.llm-history.json'");
+                    root.history = [];
+                }
+            }
         }
 
         PlasmaComponents.Label {

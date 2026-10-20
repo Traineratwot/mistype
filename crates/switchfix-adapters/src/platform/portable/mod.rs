@@ -19,8 +19,9 @@ pub use heartbeat::{
 };
 pub use layout_chars::LayoutCharMapper;
 pub use llm_history::{
-    append_llm_history, llm_history_path, llm_status_is_fresh, read_llm_history, read_llm_status,
-    touch_llm_status, write_llm_status, LlmHistoryEntry, LlmStatus, FRESH_MS,
+    append_llm_history, clear_llm_history, llm_history_path, llm_status_is_fresh,
+    read_llm_history, read_llm_status, touch_llm_status, write_llm_busy_flag, write_llm_status,
+    LlmHistoryEntry, LlmStatus, FRESH_MS,
 };
 pub use log_notifier::LogNotifier;
 pub use maps::{load_conversion_set, seed_default_maps, user_maps_dir};

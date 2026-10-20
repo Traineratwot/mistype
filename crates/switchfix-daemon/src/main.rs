@@ -50,6 +50,8 @@ enum Command {
     Selftest,
     /// Print LLM-fix history as JSON (for the Plasma widget). Newest first.
     LlmHistory,
+    /// Clear the LLM-fix history (keeps daemon status fields).
+    LlmHistoryClear,
     /// Copy a field from one history entry to the clipboard (for the widget).
     /// Index is 0 = newest. Field: `from` (original) or `to` (result).
     LlmCopy {
@@ -174,6 +176,10 @@ async fn main() -> anyhow::Result<()> {
         Command::LlmHistory => {
             let st = switchfix_adapters::read_llm_status();
             println!("{}", serde_json::to_string(&st).unwrap_or_else(|_| "{}".into()));
+        }
+        Command::LlmHistoryClear => {
+            switchfix_adapters::clear_llm_history();
+            println!("history cleared");
         }
         Command::LlmCopy { index, field } => {
             let list = switchfix_adapters::read_llm_history();
