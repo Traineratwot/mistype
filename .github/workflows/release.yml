@@ -1,8 +1,11 @@
+# Release: auto-build .deb + GitHub Pages apt repo when workspace version changes.
+# Trigger: push to main that touches Cargo.toml (or manual dispatch).
+# No cargo test — keep the pipeline short; run tests locally before bumping version.
 name: Release
 
 on:
   push:
-    branches: [main]
+    branches: [master, main]
     paths:
       - "Cargo.toml"
   workflow_dispatch:
@@ -12,7 +15,7 @@ on:
         type: boolean
         default: true
       build_only:
-        description: Run builds only (skip Release / apt-repo publish)
+        description: Run builds only (skip GitHub Release / apt-repo publish)
         type: boolean
         default: false
 
@@ -45,10 +48,12 @@ jobs:
           INPUT_FORCE: ${{ inputs.force }}
           INPUT_BUILD_ONLY: ${{ inputs.build_only }}
         run: |
+          set -euo pipefail
           VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['workspace']['package']['version'])")
           TAG="v${VERSION}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Workspace version: ${VERSION}"
 
           if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_BUILD_ONLY" = "true" ]; then
             echo "should_release=true" >> "$GITHUB_OUTPUT"
@@ -57,6 +62,7 @@ jobs:
             exit 0
           fi
 
+          # Auto path: release only when the version is new (tag not created yet).
           if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
             if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_FORCE" = "true" ]; then
               echo "should_release=true" >> "$GITHUB_OUTPUT"
@@ -64,20 +70,15 @@ jobs:
               echo "Tag ${TAG} exists — force manual release."
             else
               echo "should_release=false" >> "$GITHUB_OUTPUT"
-              echo "Tag ${TAG} already exists — skipping release."
+              echo "Tag ${TAG} already exists — skipping (version not changed)."
             fi
           else
             echo "should_release=true" >> "$GITHUB_OUTPUT"
-            echo "Will release ${TAG}."
+            echo "New version ${VERSION} — will build and publish."
           fi
 
-  test:
-    needs: [version]
-    if: needs.version.outputs.should_release == 'true'
-    uses: ./.github/workflows/ci.yml
-
   build:
-    needs: [version, test]
+    needs: [version]
     if: needs.version.outputs.should_release == 'true'
     strategy:
       fail-fast: false
@@ -126,6 +127,7 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           DEB_ARCH: ${{ matrix.deb_arch }}
         run: |
+          set -euo pipefail
           STAGE="dist/switchfix-${VERSION}-linux-${DEB_ARCH}"
           mkdir -p "$STAGE/maps"
           cp target/release/switchfix "$STAGE/"
@@ -161,7 +163,7 @@ jobs:
             dist/*.tar.gz
           if-no-files-found: error
 
-  release:
+  github-release:
     needs: [version, build]
     if: needs.version.outputs.should_release == 'true' && needs.version.outputs.build_only != 'true'
     runs-on: ubuntu-latest
@@ -180,6 +182,7 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: |
+          set -euo pipefail
           find . -maxdepth 1 -type f \( -name '*.deb' -o -name '*.tar.gz' \) \
             -printf '%f\n' | sort | xargs -r sha256sum > SHA256SUMS
           cat SHA256SUMS
@@ -191,6 +194,7 @@ jobs:
           TAG: ${{ needs.version.outputs.tag }}
           FORCE: ${{ needs.version.outputs.force_release }}
         run: |
+          set -euo pipefail
           if [ "$FORCE" = "true" ]; then
             gh release delete "${TAG}" --yes || true
             git push origin ":refs/tags/${TAG}" 2>/dev/null || true
@@ -201,7 +205,8 @@ jobs:
             --generate-notes \
             dist/*.deb dist/*.tar.gz dist/SHA256SUMS
 
-  apt-repo:
+  # GitHub Pages (gh-pages branch) + flat apt repository (pool/ + Packages)
+  pages-apt:
     needs: [version, build]
     if: needs.version.outputs.should_release == 'true' && needs.version.outputs.build_only != 'true'
     runs-on: ubuntu-latest
@@ -220,19 +225,35 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Materialize site
+      - name: Install dpkg-dev
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dpkg-dev
+
+      - name: Materialize site (keep accumulated pool/)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # keep accumulated pool/ and downloads/ from previous gh-pages
-          git clone --depth 1 --branch gh-pages \
-            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" site \
-            || (mkdir -p site && git -C site init && git -C site checkout --orphan gh-pages)
+          set -euo pipefail
+          REPO_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          if git clone --depth 1 --branch gh-pages "$REPO_URL" site; then
+            echo "Reusing existing gh-pages branch"
+          else
+            echo "First publish — creating gh-pages"
+            rm -rf site
+            mkdir -p site
+            git -C site init
+            git -C site checkout --orphan gh-pages
+          fi
+
           mkdir -p site/pool site/downloads
-          cp dist/*.deb site/pool/ 2>/dev/null || true
-          cp dist/*.tar.gz site/downloads/ 2>/dev/null || true
-          # static site source lives in pages/ (index.html + style.css)
+          cp dist/*.deb site/pool/
+          cp dist/*.tar.gz site/downloads/
+
+          # static landing page lives in pages/
           cp pages/index.html pages/style.css site/
+          touch site/.nojekyll
 
           OWNER="${GITHUB_REPOSITORY%%/*}"
           REPO="${GITHUB_REPOSITORY#*/}"
@@ -242,21 +263,37 @@ jobs:
             -e "s|__GITHUB_REPOSITORY__|${GITHUB_REPOSITORY}|g" \
             site/index.html
 
-      - name: Regenerate apt index and package list
+      - name: Generate apt index (flat repo)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq dpkg-dev
+          set -euo pipefail
           cd site
           dpkg-scanpackages --multiversion pool /dev/null > Packages
           gzip -9c Packages > Packages.gz
-          printf '%s\n' \
-            'Origin: SwitchFix' \
-            'Label: SwitchFix' \
-            'Architectures: amd64 arm64' \
-            'Description: SwitchFix apt repository' \
-            'Suite: stable' \
-            'Codename: stable' \
-            > Release
+
+          # Flat-repo Release (apt: deb [trusted=yes] <pages-url> ./)
+          {
+            echo 'Origin: SwitchFix'
+            echo 'Label: SwitchFix'
+            echo 'Suite: stable'
+            echo 'Codename: stable'
+            echo "Date: $(date -Ru)"
+            echo 'Architectures: amd64 arm64'
+            echo 'Description: SwitchFix apt repository'
+            echo 'MD5Sum:'
+            for f in Packages Packages.gz; do
+              printf ' %s %16s %s\n' \
+                "$(md5sum "$f" | awk '{print $1}')" \
+                "$(wc -c < "$f")" "$f"
+            done
+            echo 'SHA256:'
+            for f in Packages Packages.gz; do
+              printf ' %s %16s %s\n' \
+                "$(sha256sum "$f" | awk '{print $1}')" \
+                "$(wc -c < "$f")" "$f"
+            done
+          } > Release
+
+          # package list for the landing page
           {
             echo '<ul class="packages">'
             for f in pool/switchfix_*.deb; do
@@ -281,6 +318,7 @@ jobs:
             done
             echo '</ul>'
           } > /tmp/packages.html
+
           python3 - <<'PY'
           from pathlib import Path
           html = Path("index.html").read_text()
@@ -290,14 +328,20 @@ jobs:
           Path("index.html").write_text(html)
           PY
 
+          echo '--- Release ---'
+          cat Release
+          echo '--- Packages head ---'
+          head -30 Packages
+
       - name: Push gh-pages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
+          set -euo pipefail
           cd site
           git add -A
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -m "apt: add switchfix ${VERSION}" --allow-empty
+              commit -m "apt: switchfix ${VERSION}" --allow-empty
           git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:gh-pages

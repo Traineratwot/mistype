@@ -55,6 +55,29 @@ sudo usermod -aG input "$USER"   # затем перелогиниться
 
 ---
 
+## Установка (apt)
+
+Debian / Ubuntu / Kubuntu — готовый deb-репозиторий на GitHub Pages:
+
+```bash
+echo "deb [trusted=yes] https://traineratwot.github.io/switchfix ./" \
+  | sudo tee /etc/apt/sources.list.d/switchfix.list
+sudo apt update
+sudo apt install switchfix
+```
+
+Затем:
+
+```bash
+switchfix setup      # группа input + udev (sudo только если нужно)
+switchfix doctor     # диагностика
+systemctl --user enable --now switchfix.service   # автозапуск демона (по желанию)
+```
+
+Пакет ставит бинарник, карты раскладок, desktop-файл, systemd user unit, udev-правило и иконку. Страница репозитория: [traineratwot.github.io/switchfix](https://traineratwot.github.io/switchfix).
+
+---
+
 ## Сборка и запуск
 
 ```bash
