@@ -64,6 +64,12 @@ server requires one), e.g. `http://127.0.0.1:11434` for Ollama.
 | E7 | Tray menu «Конвертировать выделение» | Same as Ctrl+Alt+R |
 | E8 | Two conversions in a row | Both succeed |
 | E9 | `mistype doctor` with/without `[llm] base_url` | `llm api: configured …` / `not configured …`; token never printed |
+| E10 | `mistype doctor` with `[llm]` configured | `llm chat: OK "endpoint replied"` (or `FAIL` with error detail if endpoint is down) |
+| E11 | `mistype doctor` (online) | `update: up to date (X.Y.Z)` or `update available: vX.Y.Z` |
+| E12 | `mistype doctor` (offline / blocked) | `update: check skipped (…)` — report still shows "All checks passed" |
+| E13 | Settings: system-prompt textarea — edit multi-line text, Save | Text preserved across reload; no cursor jump |
+| E14 | Settings: «Вставить» on any of the 6 fields | Clipboard text inserted into the field |
+| E15 | Settings: «Сбросить» next to system prompt | Prompt reverts to the built-in default |
 
 ## Known limitations (expected)
 

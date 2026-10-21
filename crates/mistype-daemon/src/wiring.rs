@@ -5,22 +5,26 @@ use std::sync::Arc;
 use mistype_adapters::platform::{create_platform, BuildOptions, PlatformServices};
 use mistype_adapters::{ensure_config, load_conversion_set, seed_default_maps, TomlConfigStore};
 use mistype_app::config::AppConfig;
-use mistype_app::ports::{ConfigStore, HotkeySource, TypingBufferPort};
+use mistype_app::ports::{
+    ConfigStore, CorrectorFactory, HeartbeatPort, HotkeySource, LlmHistoryStore, SoundPort,
+    TypingBufferPort,
+};
 use mistype_app::CorrectionService;
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
 /// Composition root handle. Extra fields are kept for settings reload / shutdown
 /// wiring and are part of the daemon API.
-#[allow(dead_code)]
 pub struct AppContext {
     pub service: Arc<CorrectionService>,
     pub config_tx: watch::Sender<AppConfig>,
-    pub config_rx: watch::Receiver<AppConfig>,
     pub buffer: Arc<dyn TypingBufferPort>,
     pub hotkeys: Box<dyn HotkeySource>,
     pub store: Arc<dyn ConfigStore>,
-    pub shutdown: tokio::sync::Notify,
+    pub sound: Arc<dyn SoundPort>,
+    pub history: Arc<dyn LlmHistoryStore>,
+    pub heartbeat: Arc<dyn HeartbeatPort>,
+    pub corrector_factory: Arc<dyn CorrectorFactory>,
 }
 
 pub struct WireOptions {
@@ -65,7 +69,7 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let PlatformServices {
-        injector: _injector,
+        injector,
         clipboard,
         selection,
         buffer,
@@ -77,7 +81,7 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
     } = services;
 
     let service = Arc::new(CorrectionService::with_focus(
-        _injector.clone(),
+        injector.clone(),
         clipboard,
         selection,
         buffer.clone() as Arc<dyn TypingBufferPort>,
@@ -89,8 +93,15 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
         cfg.general.enabled_on_start,
     ));
 
+    // Ports for sound / history / heartbeat / corrector construction.
+    let sound: Arc<dyn SoundPort> = Arc::new(mistype_adapters::SystemSound::new());
+    let history: Arc<dyn LlmHistoryStore> = Arc::new(mistype_adapters::FileLlmHistory::new());
+    let heartbeat: Arc<dyn HeartbeatPort> = Arc::new(mistype_adapters::FileHeartbeat::new());
+    let corrector_factory: Arc<dyn CorrectorFactory> =
+        Arc::new(mistype_adapters::OpenAiCorrectorFactory::new());
+
     // External OpenAI-compatible corrector (preferred for LlmFixSelection).
-    install_text_corrector(&service, &cfg);
+    install_text_corrector(&service, &cfg, &corrector_factory);
 
     // Status dump so the operator can see at a glance what is active.
     info!("--- Mistype status ---");
@@ -128,28 +139,39 @@ pub async fn build(opts: WireOptions) -> anyhow::Result<AppContext> {
     Ok(AppContext {
         service,
         config_tx,
-        config_rx,
         buffer,
         hotkeys,
         store: config,
-        shutdown: tokio::sync::Notify::new(),
+        sound,
+        history,
+        heartbeat,
+        corrector_factory,
     })
 }
 
 /// Build and install the external OpenAI-compatible corrector from `[llm]`.
 /// Called at startup and again on config reload so URL/token/prompt changes
 /// take effect without a full restart.
-pub fn install_text_corrector(service: &Arc<CorrectionService>, cfg: &AppConfig) {
-    if cfg.llm.enabled && !cfg.llm.base_url.trim().is_empty() {
-        let corrector = mistype_adapters::platform::portable::OpenAiCorrector::new(&cfg.llm);
-        info!(
-            "llm-fix selection: backend=openai base={} model={:?}",
-            cfg.llm.base_url, cfg.llm.model
-        );
-        service.set_text_corrector(Arc::new(corrector));
-    } else {
-        info!("llm-fix selection: openai backend off (enabled={} base_url empty={})",
-            cfg.llm.enabled, cfg.llm.base_url.trim().is_empty());
+pub fn install_text_corrector(
+    service: &Arc<CorrectionService>,
+    cfg: &AppConfig,
+    factory: &Arc<dyn CorrectorFactory>,
+) {
+    match factory.build_corrector(&cfg.llm) {
+        Some(corrector) => {
+            info!(
+                "llm-fix selection: backend=openai base={} model={:?}",
+                cfg.llm.base_url, cfg.llm.model
+            );
+            service.set_text_corrector(corrector);
+        }
+        None => {
+            info!(
+                "llm-fix selection: openai backend off (enabled={} base_url empty={})",
+                cfg.llm.enabled,
+                cfg.llm.base_url.trim().is_empty()
+            );
+        }
     }
 }
 

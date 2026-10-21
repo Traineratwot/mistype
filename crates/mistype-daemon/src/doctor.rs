@@ -10,7 +10,7 @@ pub struct DoctorReport {
 
 impl DoctorReport {
     pub fn print(&self) {
-        println!("Mistype doctor");
+        println!("Mistype doctor (v{})", env!("CARGO_PKG_VERSION"));
         println!("================");
         for (name, ok, detail) in &self.lines {
             let mark = if *ok { "OK " } else { "FAIL" };
@@ -159,53 +159,9 @@ pub async fn run() -> DoctorReport {
             },
         ));
 
-        // D-Bus org.kde.keyboard
-        let layouts_ok = match zbus::Connection::session().await {
-            Ok(conn) => {
-                use zbus::proxy;
-                #[proxy(
-                    interface = "org.kde.KeyboardLayouts",
-                    default_service = "org.kde.keyboard",
-                    default_path = "/Layouts"
-                )]
-                trait Probe {
-                    #[zbus(name = "getLayout")]
-                    fn get_layout(&self) -> zbus::Result<u32>;
-                    #[zbus(name = "getLayoutsList")]
-                    fn get_layouts_list(&self) -> zbus::Result<Vec<(String, String, String)>>;
-                    #[zbus(name = "setLayout")]
-                    fn set_layout(&self, index: u32) -> zbus::Result<bool>;
-                }
-                match ProbeProxy::new(&conn).await {
-                    Ok(p) => match p.get_layouts_list().await {
-                        Ok(list) => {
-                            let names: Vec<_> =
-                                list.iter().map(|(s, _, n)| format!("{s}({n})")).collect();
-                            let cur = p.get_layout().await.unwrap_or(999);
-                            // Write probe: setLayout(current) is a safe no-op that
-                            // verifies the set path actually works.
-                            let write_ok = p.set_layout(cur).await.unwrap_or(false);
-                            let write_note = if write_ok {
-                                "setLayout ok"
-                            } else {
-                                "setLayout rejected"
-                            };
-                            (
-                                write_ok,
-                                format!(
-                                    "layouts: [{}] current index {cur} ({write_note})",
-                                    names.join(", ")
-                                ),
-                            )
-                        }
-                        Err(e) => (false, format!("getLayoutsList failed: {e}")),
-                    },
-                    Err(e) => (false, format!("proxy failed: {e}")),
-                }
-            }
-            Err(e) => (false, format!("session bus: {e}")),
-        };
-        lines.push(("org.kde.keyboard".into(), layouts_ok.0, layouts_ok.1));
+        // D-Bus org.kde.keyboard (write-probe via adapters).
+        let (layouts_ok, layouts_detail) = mistype_adapters::probe_layouts().await;
+        lines.push(("org.kde.keyboard".into(), layouts_ok, layouts_detail));
     }
 
     // Config path
@@ -258,6 +214,22 @@ pub async fn run() -> DoctorReport {
                 true,
                 format!("configured (base={}, model={:?})", cfg.llm.base_url, cfg.llm.model),
             ));
+            // Live chat probe — FAIL is a real defect (feature on, endpoint broken).
+            use mistype_app::ports::LlmProbe;
+            let probe = mistype_adapters::OpenAiCorrector::new(&cfg.llm);
+            match probe.test_chat(&cfg.llm).await {
+                Ok(reply) => {
+                    let snippet: String = reply.chars().take(40).collect();
+                    lines.push((
+                        "llm chat".into(),
+                        true,
+                        format!("endpoint replied ({snippet:?})"),
+                    ));
+                }
+                Err(e) => {
+                    lines.push(("llm chat".into(), false, format!("{e}")));
+                }
+            }
         } else {
             lines.push((
                 "llm api".into(),
@@ -269,6 +241,22 @@ pub async fn run() -> DoctorReport {
                 ),
             ));
         }
+    }
+
+    // Update check — informational only: offline is not a product defect.
+    {
+        use mistype_app::ports::UpdateChecker;
+        let checker = mistype_adapters::GithubUpdateChecker::new();
+        let detail = match checker.check() {
+            mistype_app::ports::UpdateStatus::UpToDate(v) => format!("up to date ({v})"),
+            mistype_app::ports::UpdateStatus::Available(tag) => {
+                format!("update available: {tag}")
+            }
+            mistype_app::ports::UpdateStatus::Unavailable(reason) => {
+                format!("check skipped ({reason})")
+            }
+        };
+        lines.push(("update".into(), true, detail));
     }
 
     DoctorReport { lines }

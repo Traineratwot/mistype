@@ -121,8 +121,10 @@ platform/
 
 ### Ports (unified interface) — `mistype-app/src/ports.rs`
 
-`TextInjector`, `ClipboardPort`, `SelectionCapture`, `TypingBufferPort`,
-`TextCorrector`, `LayoutSwitcher`, `HotkeySource`, `ConfigStore`, `Notifier`,
+`TextInjector`, `ClipboardPort`, `ClipboardRead`, `SelectionCapture`,
+`TypingBufferPort`, `TextCorrector`, `LlmProbe`, `CorrectorFactory`,
+`LayoutSwitcher`, `HotkeySource`, `ConfigStore`, `Notifier`,
+`SoundPort`, `LlmHistoryStore`, `HeartbeatPort`, `UpdateChecker`,
 `FocusMonitor` (optional).
 
 `TextCorrector::correct_text(&str) -> String` replaces the old
@@ -258,7 +260,7 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 
 `AppConfig` in `mistype-app/src/config.rs` (`Default` + `validate()`):
 
-- `general.enabled_on_start`, `language`, `tray_icon_style`
+- `general.enabled_on_start`, `language`
 - `hotkeys.convert_selection / toggle_enabled / llm_fix_selection`
   — grammar `ctrl+shift+f1`, `insert`, `capslock`, `home`, … (`HotkeyBinding::parse`)
   — **empty string = action disabled** (Esc in Settings clears the field)
@@ -266,14 +268,13 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
     and replaces it (see `[llm]`).
 - `hotkeys.hotkey_consume` (default **true**) — EVIOCGRAB + passthrough
 - `hotkeys.use_portal_hotkeys` — **flag only, not implemented**
-- `behavior.capture_mode`, `behavior.replace_strategy`
 - `behavior.restore_clipboard`, `behavior.copy_settle_ms`, `behavior.paste_settle_ms`
-- `behavior.terminal_paste_combo`, `behavior.terminal_erase`
+- `behavior.terminal_erase`
   — terminal mode: Ctrl+A / Ctrl+K / paste combo, no separate hotkey
 - `behavior.terminal_apps` — app ids that use terminal paste (auto)
 - `behavior.excluded_apps` — never correct here (keepassxc, …)
 - `behavior.disable_in_fullscreen` (default **true**) — skip games / fullscreen video
-- `privacy.typing_buffer`, `privacy.typing_buffer_max_keys`, `privacy.log_text_content`
+- `privacy.typing_buffer`, `privacy.typing_buffer_max_keys`
 - `layouts.active` — KDE short ids `["us","ru"]`
 - `[llm]` — LLM-fix selection:
   - `enabled` (default `true`) — master switch for the hotkey
@@ -352,7 +353,7 @@ Watch `RUST_LOG=debug` for `evdev key …` / `hotkey match` / `hotkey received`.
   and must stay visible to `mistype` CLI + the Plasma widget.
 - `packaging/systemd/99-mistype-uinput.rules` — uinput group/mode
 - `packaging/desktop/mistype.desktop` — KDE autostart bits
-- `packaging/plasmoid/org.mistype.suggestions` — Plasma widget «Mistype LLM»
+- `packaging/plasmoid/org.mistype.llm` — Plasma widget «Mistype LLM»
   (request history + copy; installed to `~/.local/share/plasma/plasmoids/`).
   No suggest-bar / dictionary UI.
 - `packaging/install.sh`, `packaging/build-deb.sh` → `target/mistype_0.1.0_amd64.deb`
@@ -374,6 +375,12 @@ prove the intercept path. (4) `RUST_LOG=debug` daemon → look for `hotkey recei
 **Q: Doctor says “log out and back in for this session”.**  
 A: `usermod` updated the passwd DB only. The current session token doesn't have
 `input`. Re-login, or start with `sg input -c …`.
+
+**Q: How do I know my version / is there an update?**  
+A: `mistype --version` prints the current version. `mistype doctor` shows the
+version in the header and an `update` line (`up to date` / `update available` /
+`check skipped` when offline). The check is one-shot against GitHub Releases
+and only runs when you invoke `doctor`.
 
 **Q: Keyboard died / no input after starting daemon.**  
 A: `hotkey_consume` grabbed devices. Passthrough should re-inject non-hotkeys.
@@ -471,5 +478,8 @@ No telemetry, no keylogging persistence. Keystroke buffer is RAM-only and
 optional. The only network traffic is the **user-configured LLM endpoint**
 (`llm.base_url`): on the `llm_fix_selection` hotkey the current selection is
 sent to that endpoint and nothing else. Empty `base_url` = no network at all.
+**Exception:** `mistype doctor` performs a one-shot update check against
+GitHub Releases (`api.github.com/repos/Traineratwot/mistype`) — explicit user
+action, no telemetry, never automatic.
 Group `input` is required for global hotkeys / uinput — documented risk,
 see `docs/PLAN.md` §9, `docs/PRIVACY.md`, `docs/SECURITY.md`.

@@ -16,8 +16,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use mistype_app::ports::{
-    CaptureError, CapturedSelection, ClipboardError, ClipboardPort, SavedClipboard, SelectionCapture,
-    TextInjector,
+    CaptureError, CapturedSelection, ClipboardError, ClipboardPort, ClipboardRead, SavedClipboard,
+    SelectionCapture, TextInjector,
 };
 use mistype_domain::KeyChord;
 use tokio::sync::Mutex as AsyncMutex;
@@ -208,6 +208,14 @@ impl ClipboardPort for ArboardClipboard {
             Some(t) => self.req_set(&t),
             None => Ok(()),
         }
+    }
+}
+
+/// Read-only view for the settings UI paste buttons. Does not touch
+/// `last_save` / marker-protocol state.
+impl ClipboardRead for ArboardClipboard {
+    fn get_text(&self) -> Result<String, ClipboardError> {
+        self.req_get()
     }
 }
 

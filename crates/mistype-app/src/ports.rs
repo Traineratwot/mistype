@@ -1,5 +1,7 @@
 //! Ports (traits) — boundaries between application and OS adapters.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use mistype_domain::{KeyChord, LayoutId, LayoutIndex, LayoutInfo, WordSpan};
 use thiserror::Error;
@@ -263,4 +265,82 @@ pub trait FocusMonitor: Send + Sync {
     /// Best-effort; `None` when the compositor cannot tell us (then we
     /// fall back to the generic GUI strategy and never block).
     async fn active_window(&self) -> Option<ActiveWindow>;
+}
+
+// ---------- update check ----------
+
+/// Result of a one-shot update check (GitHub Releases).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateStatus {
+    /// Already running the latest release; carries the current version.
+    UpToDate(String),
+    /// A newer release exists; carries the remote tag (e.g. `v2.1.0`).
+    Available(String),
+    /// Network/parse failure — informational only, never a product defect.
+    Unavailable(String),
+}
+
+/// One-shot release check, used by `mistype doctor`.
+/// Sync by design: doctor is a blocking CLI, no need for async HTTP.
+pub trait UpdateChecker: Send + Sync {
+    fn check(&self) -> UpdateStatus;
+}
+
+// ---------- clipboard read (settings UI paste) ----------
+
+/// Read-only clipboard access for the settings UI «Вставить» buttons.
+/// Separate from [`ClipboardPort`] so the marker protocol / `last_save`
+/// state is never touched by a simple paste.
+pub trait ClipboardRead: Send + Sync {
+    fn get_text(&self) -> Result<String, ClipboardError>;
+}
+
+// ---------- sound ----------
+
+/// Hotkey / fix feedback sounds. Best-effort: never fails the caller.
+pub trait SoundPort: Send + Sync {
+    /// Short confirmation after a hotkey is received.
+    fn play_hotkey(&self);
+    /// Short signal after a text replacement (LLM fix / undo).
+    fn play_fix(&self);
+}
+
+// ---------- corrector factory ----------
+
+/// Builds corrector / probe instances from `[llm]` config.
+/// Keeps `OpenAiCorrector` construction behind a port so wiring does not
+/// hardcode the concrete adapter.
+pub trait CorrectorFactory: Send + Sync {
+    /// `None` when the feature is off (disabled or empty `base_url`).
+    fn build_corrector(&self, cfg: &crate::config::Llm) -> Option<Arc<dyn TextCorrector>>;
+    /// Always returns a probe (for doctor / settings «Тест»).
+    fn build_probe(&self, cfg: &crate::config::Llm) -> Arc<dyn LlmProbe>;
+}
+
+// ---------- LLM history / heartbeat ----------
+
+/// One LLM-fix history entry (persisted for the Plasma widget).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlmHistoryEntry {
+    /// Unix time in milliseconds.
+    pub ts: u64,
+    /// Original selection (before replace).
+    pub from: String,
+    /// LLM result (after replace).
+    pub to: String,
+    /// `true` when the text was actually replaced.
+    pub ok: bool,
+}
+
+/// Rolling LLM-fix history for the Plasma widget.
+pub trait LlmHistoryStore: Send + Sync {
+    fn append(&self, entry: LlmHistoryEntry);
+    fn clear(&self);
+    fn read(&self) -> Vec<LlmHistoryEntry>;
+}
+
+/// Daemon liveness file (heartbeat).
+pub trait HeartbeatPort: Send + Sync {
+    fn touch(&self, enabled: bool, busy: bool);
+    fn clear(&self);
 }

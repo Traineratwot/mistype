@@ -131,8 +131,8 @@ if [[ -f "${ROOT}/assets/icons/mistype.svg" ]]; then
 fi
 
 # Plasma LLM-history widget → ~/.local/share/plasma/plasmoids (user-level, no sudo).
-PLASMOID_SRC="${ROOT}/packaging/plasmoid/org.mistype.suggestions"
-PLASMOID_DST="${HOME}/.local/share/plasma/plasmoids/org.mistype.suggestions"
+PLASMOID_SRC="${ROOT}/packaging/plasmoid/org.mistype.llm"
+PLASMOID_DST="${HOME}/.local/share/plasma/plasmoids/org.mistype.llm"
 if [[ -d "$PLASMOID_SRC" ]]; then
   echo "==> Installing Plasma widget to ${PLASMOID_DST}"
   mkdir -p "${HOME}/.local/share/plasma/plasmoids"

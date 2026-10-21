@@ -58,16 +58,10 @@ pub struct General {
     /// UI language: "ru" | "en"
     #[serde(default = "default_language")]
     pub language: String,
-    /// "color" | "mono"
-    #[serde(default = "default_icon_style")]
-    pub tray_icon_style: String,
 }
 
 fn default_language() -> String {
     "ru".into()
-}
-fn default_icon_style() -> String {
-    "color".into()
 }
 
 impl Default for General {
@@ -75,7 +69,6 @@ impl Default for General {
         Self {
             enabled_on_start: true,
             language: default_language(),
-            tray_icon_style: default_icon_style(),
         }
     }
 }
@@ -142,22 +135,14 @@ impl Default for LayoutsCfg {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Behavior {
-    /// "auto" | "selection" | "word"
-    #[serde(default = "def_capture_mode")]
-    pub capture_mode: String,
     #[serde(default = "def_true")]
     pub fallback_to_word_on_no_selection: bool,
-    /// "auto" | "retype" | "paste"
-    #[serde(default = "def_replace_strategy")]
-    pub replace_strategy: String,
     #[serde(default = "def_true")]
     pub restore_clipboard: bool,
     #[serde(default = "def_copy_settle")]
     pub copy_settle_ms: u64,
     #[serde(default = "def_paste_settle")]
     pub paste_settle_ms: u64,
-    #[serde(default = "def_term_paste")]
-    pub terminal_paste_combo: String,
     /// "line" | "backspaces"
     #[serde(default = "def_term_erase")]
     pub terminal_erase: String,
@@ -173,15 +158,6 @@ pub struct Behavior {
     pub disable_in_fullscreen: bool,
 }
 
-fn def_capture_mode() -> String {
-    "auto".into()
-}
-fn def_replace_strategy() -> String {
-    "auto".into()
-}
-fn def_term_paste() -> String {
-    "ctrl+shift+v".into()
-}
 fn def_term_erase() -> String {
     "line".into()
 }
@@ -206,13 +182,10 @@ fn def_terminal_apps() -> Vec<String> {
 impl Default for Behavior {
     fn default() -> Self {
         Self {
-            capture_mode: def_capture_mode(),
             fallback_to_word_on_no_selection: true,
-            replace_strategy: def_replace_strategy(),
             restore_clipboard: true,
             copy_settle_ms: def_copy_settle(),
             paste_settle_ms: def_paste_settle(),
-            terminal_paste_combo: def_term_paste(),
             terminal_erase: def_term_erase(),
             excluded_apps: def_excluded_apps(),
             terminal_apps: def_terminal_apps(),
@@ -227,8 +200,6 @@ pub struct Privacy {
     pub typing_buffer: bool,
     #[serde(default = "def_buf_max")]
     pub typing_buffer_max_keys: usize,
-    #[serde(default = "def_false")]
-    pub log_text_content: bool,
 }
 
 impl Default for Privacy {
@@ -236,7 +207,6 @@ impl Default for Privacy {
         Self {
             typing_buffer: true,
             typing_buffer_max_keys: def_buf_max(),
-            log_text_content: false,
         }
     }
 }
@@ -255,7 +225,7 @@ pub struct Llm {
     #[serde(default = "def_empty")]
     pub api_token: String,
     /// System / initial prompt prepended as the first `system` message.
-    #[serde(default = "def_llm_system_prompt")]
+    #[serde(default = "default_llm_system_prompt")]
     pub system_prompt: String,
     /// Optional model id (`gpt-4o-mini`, `qwen2.5:0.5b`, …).
     /// Empty = omit the `model` field.
@@ -266,7 +236,8 @@ pub struct Llm {
     pub timeout_ms: u64,
 }
 
-fn def_llm_system_prompt() -> String {
+/// Default system prompt for the LLM-fix feature (also used by the UI «Сбросить» button).
+pub fn default_llm_system_prompt() -> String {
     "Исправь орфографию, грамматику и пунктуацию в тексте. \
      Верни ТОЛЬКО исправленный текст без пояснений и без кавычек."
         .into()
@@ -281,7 +252,7 @@ impl Default for Llm {
             enabled: true,
             base_url: def_empty(),
             api_token: def_empty(),
-            system_prompt: def_llm_system_prompt(),
+            system_prompt: default_llm_system_prompt(),
             model: def_empty(),
             timeout_ms: def_llm_timeout(),
         }

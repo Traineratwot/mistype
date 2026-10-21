@@ -3,6 +3,8 @@
 mod focus;
 mod layout;
 
+pub use layout::probe_layouts;
+
 use std::sync::Arc;
 
 use mistype_app::config::AppConfig;

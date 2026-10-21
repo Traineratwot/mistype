@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use mistype_app::ports::LlmHistoryStore;
 use serde::{Deserialize, Serialize};
 
 const MAX_ENTRIES: usize = 30;
@@ -149,6 +150,53 @@ pub fn llm_status_is_fresh(st: &LlmStatus) -> bool {
         return false;
     }
     now_ms().saturating_sub(st.updated) <= FRESH_MS
+}
+
+// ---------- port wrapper ----------
+
+fn to_port(e: LlmHistoryEntry) -> mistype_app::ports::LlmHistoryEntry {
+    mistype_app::ports::LlmHistoryEntry {
+        ts: e.ts,
+        from: e.from,
+        to: e.to,
+        ok: e.ok,
+    }
+}
+
+fn from_port(e: mistype_app::ports::LlmHistoryEntry) -> LlmHistoryEntry {
+    LlmHistoryEntry {
+        ts: e.ts,
+        from: e.from,
+        to: e.to,
+        ok: e.ok,
+    }
+}
+
+/// [`LlmHistoryStore`] over the JSON file helpers above.
+pub struct FileLlmHistory;
+
+impl FileLlmHistory {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for FileLlmHistory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LlmHistoryStore for FileLlmHistory {
+    fn append(&self, entry: mistype_app::ports::LlmHistoryEntry) {
+        append_llm_history(from_port(entry));
+    }
+    fn clear(&self) {
+        clear_llm_history();
+    }
+    fn read(&self) -> Vec<mistype_app::ports::LlmHistoryEntry> {
+        read_llm_history().into_iter().map(to_port).collect()
+    }
 }
 
 #[cfg(test)]

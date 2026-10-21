@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use mistype_app::ports::HeartbeatPort;
+
 /// Where the heartbeat file lives.
 pub fn daemon_heartbeat_path() -> PathBuf {
     std::env::temp_dir().join("mistype.daemon.json")
@@ -47,6 +49,32 @@ pub fn read_daemon_heartbeat() -> Option<DaemonHeartbeat> {
         Some(hb)
     } else {
         None
+    }
+}
+
+// ---------- port wrapper ----------
+
+/// [`HeartbeatPort`] over the file helpers above.
+pub struct FileHeartbeat;
+
+impl FileHeartbeat {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for FileHeartbeat {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HeartbeatPort for FileHeartbeat {
+    fn touch(&self, enabled: bool, busy: bool) {
+        write_daemon_heartbeat_ex(enabled, busy);
+    }
+    fn clear(&self) {
+        clear_daemon_heartbeat();
     }
 }
 

@@ -8,11 +8,11 @@ use std::time::Duration;
 
 use iced::keyboard::{Key, Modifiers};
 use iced::widget::{
-    button, checkbox, column, container, mouse_area, row, scrollable, text, tooltip,
+    button, checkbox, column, container, mouse_area, row, scrollable, text, text_editor, tooltip,
 };
 use iced::{Element, Length, Subscription, Task, Theme};
-use mistype_app::config::AppConfig;
-use mistype_app::ports::{ConfigError, ConfigStore, LlmProbe};
+use mistype_app::config::{default_llm_system_prompt, AppConfig};
+use mistype_app::ports::{ClipboardRead, ConfigError, ConfigStore, LlmProbe};
 use tracing::info;
 
 pub struct SettingsApp {
@@ -40,6 +40,11 @@ pub struct SettingsApp {
     spin_frame: usize,
     /// Bumps on every models fetch so stale results are dropped.
     models_gen: u64,
+    /// Optional clipboard reader for «Вставить» buttons.
+    clipboard_read: Option<Arc<dyn ClipboardRead>>,
+    /// Multi-line editor state for `llm.system_prompt`.
+    /// Recreated only on reset / paste / reload — never inside `view()`.
+    prompt_content: text_editor::Content,
 }
 
 /// Modifier checkboxes bound to a single hotkey (not global).
@@ -99,6 +104,17 @@ pub enum ModKey {
     Meta,
 }
 
+/// Fields that support a «Вставить» (paste from clipboard) button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasteField {
+    Language,
+    LlmBaseUrl,
+    LlmApiToken,
+    LlmModel,
+    LlmSystemPrompt,
+    LlmTimeout,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     ToggleEnabled(bool),
@@ -111,6 +127,12 @@ pub enum Message {
     LlmModel(String),
     LlmSystemPrompt(String),
     LlmTimeout(String),
+    /// Multi-line system-prompt editor action.
+    PromptEditor(text_editor::Action),
+    /// Paste clipboard text into a specific field.
+    PasteInto(PasteField),
+    /// Restore the default system prompt.
+    ResetSystemPrompt,
     /// Probe the API (tiny completion) and refresh the model list.
     TestLlm,
     /// Models arrived from `GET /v1/models` (gen, result).
@@ -247,6 +269,53 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
         }
         Message::LlmModel(s) => app.cfg.llm.model = s,
         Message::LlmSystemPrompt(s) => app.cfg.llm.system_prompt = s,
+        Message::PromptEditor(action) => {
+            app.prompt_content.perform(action);
+            app.cfg.llm.system_prompt = app.prompt_content.text();
+        }
+        Message::PasteInto(field) => {
+            let Some(clip) = app.clipboard_read.clone() else {
+                app.status = "Буфер обмена недоступен".into();
+                return Task::none();
+            };
+            match clip.get_text() {
+                Ok(text) => {
+                    let text = text.trim_end_matches('\n').to_string();
+                    match field {
+                        PasteField::Language => app.cfg.general.language = text,
+                        PasteField::LlmBaseUrl => {
+                            app.cfg.llm.base_url = text;
+                            return fetch_models_task(app, true);
+                        }
+                        PasteField::LlmApiToken => {
+                            app.cfg.llm.api_token = text;
+                            return fetch_models_task(app, true);
+                        }
+                        PasteField::LlmModel => app.cfg.llm.model = text,
+                        PasteField::LlmSystemPrompt => {
+                            app.cfg.llm.system_prompt = text.clone();
+                            app.prompt_content =
+                                text_editor::Content::with_text(&text);
+                        }
+                        PasteField::LlmTimeout => {
+                            if let Ok(n) = text.trim().parse::<u64>() {
+                                app.cfg.llm.timeout_ms = n;
+                            }
+                        }
+                    }
+                    app.status = "Вставлено из буфера обмена".into();
+                }
+                Err(e) => {
+                    app.status = format!("Буфер обмена: {e}");
+                }
+            }
+        }
+        Message::ResetSystemPrompt => {
+            let def = default_llm_system_prompt();
+            app.cfg.llm.system_prompt = def.clone();
+            app.prompt_content = text_editor::Content::with_text(&def);
+            app.status = "Системный промпт сброшен к умолчанию".into();
+        }
         Message::LlmTimeout(s) => {
             if let Ok(n) = s.trim().parse::<u64>() {
                 app.cfg.llm.timeout_ms = n;
@@ -429,6 +498,8 @@ fn update(app: &mut SettingsApp, message: Message) -> Task<Message> {
                         let m = mods_from_combo(f.get(&app.cfg));
                         app.mods[f.index()] = m;
                     }
+                    app.prompt_content =
+                        text_editor::Content::with_text(&app.cfg.llm.system_prompt);
                     write_reload_flag();
                     app.status =
                         "Конфигурация перезагружена. Хоткеи — после перезапуска демона.".into();
@@ -701,6 +772,14 @@ fn chip_label(id: &str) -> String {
     }
 }
 
+/// Small «Вставить» button that pastes clipboard text into `field`.
+fn paste_btn(field: PasteField) -> Element<'static, Message> {
+    button("Вставить")
+        .on_press(Message::PasteInto(field))
+        .padding([6, 12])
+        .into()
+}
+
 /// Semantic section card: rounded box with a title and body content.
 fn section_card<'a>(
     title: &'a str,
@@ -800,6 +879,7 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
                 iced::widget::text_input("ru", &cfg.general.language)
                     .on_input(Message::Language)
                     .width(Length::Fixed(80.0)),
+                paste_btn(PasteField::Language),
             ]
             .spacing(8)
             .align_y(iced::Alignment::Center),
@@ -887,6 +967,7 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
                 iced::widget::text_input("https://api.openai.com", &cfg.llm.base_url)
                     .on_input(Message::LlmBaseUrl)
                     .width(Length::Fill),
+                paste_btn(PasteField::LlmBaseUrl),
             ]
             .spacing(8)
             .align_y(iced::Alignment::Center),
@@ -901,6 +982,7 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
                 iced::widget::text_input("(не задан)", &cfg.llm.api_token)
                     .on_input(Message::LlmApiToken)
                     .width(Length::Fill),
+                paste_btn(PasteField::LlmApiToken),
             ]
             .spacing(8)
             .align_y(iced::Alignment::Center),
@@ -911,6 +993,7 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
                 iced::widget::text_input("gpt-4o-mini", &cfg.llm.model)
                     .on_input(Message::LlmModel)
                     .width(Length::Fill),
+                paste_btn(PasteField::LlmModel),
                 if app.llm_busy {
                     button("Тест…").padding([6, 12])
                 } else {
@@ -942,16 +1025,25 @@ fn view(app: &SettingsApp) -> Element<'_, Message> {
                     .align_y(iced::Alignment::Center)
             },
             text("Системный промпт:").size(13),
-            iced::widget::text_input("промпт", &cfg.llm.system_prompt)
-                .on_input(Message::LlmSystemPrompt)
-                .width(Length::Fill),
-            text("Отправляется как system-сообщение перед выделенным текстом.")
-                .size(12),
+            text_editor(&app.prompt_content)
+                .on_action(Message::PromptEditor)
+                .height(Length::Fixed(120.0)),
+            row![
+                paste_btn(PasteField::LlmSystemPrompt),
+                button("Сбросить")
+                    .on_press(Message::ResetSystemPrompt)
+                    .padding([6, 12]),
+                text("Отправляется как system-сообщение перед выделенным текстом.")
+                    .size(12),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
             row![
                 text("Таймаут, мс:"),
                 iced::widget::text_input("15000", &cfg.llm.timeout_ms.to_string())
                     .on_input(Message::LlmTimeout)
                     .width(Length::Fixed(100.0)),
+                paste_btn(PasteField::LlmTimeout),
             ]
             .spacing(8)
             .align_y(iced::Alignment::Center),
@@ -1074,6 +1166,7 @@ pub fn run_settings(
     store: Box<dyn ConfigStore + Send + Sync>,
     config_dir: std::path::PathBuf,
     probe: Option<Arc<dyn LlmProbe>>,
+    clipboard_read: Option<Arc<dyn ClipboardRead>>,
 ) -> iced::Result {
     // Hybrid-GPU + Wayland: the Vulkan surface can come up with an empty
     // present-mode list (dmabuf import failure on NVIDIA), which panics wgpu.
@@ -1091,6 +1184,7 @@ pub fn run_settings(
     for f in HotkeyField::ALL {
         mods[f.index()] = mods_from_combo(f.get(&cfg));
     }
+    let prompt_text = cfg.llm.system_prompt.clone();
     let mut app = SettingsApp {
         cfg,
         store,
@@ -1105,6 +1199,8 @@ pub fn run_settings(
         llm_busy: false,
         spin_frame: 0,
         models_gen: 0,
+        clipboard_read,
+        prompt_content: text_editor::Content::with_text(&prompt_text),
     };
 
     // Auto-load model hints if the API is already configured.

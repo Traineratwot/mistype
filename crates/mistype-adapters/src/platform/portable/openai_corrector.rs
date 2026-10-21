@@ -6,9 +6,11 @@
 
 use std::time::Duration;
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use mistype_app::config::Llm;
-use mistype_app::ports::{LlmProbe, TextCorrector, TextFixError};
+use mistype_app::ports::{CorrectorFactory, LlmProbe, TextCorrector, TextFixError};
 use tracing::debug;
 
 pub struct OpenAiCorrector {
@@ -193,6 +195,36 @@ impl LlmProbe for OpenAiCorrector {
         tokio::task::spawn_blocking(move || probe.post_chat(&body))
             .await
             .map_err(|e| TextFixError::Http(format!("join: {e}")))?
+    }
+}
+
+/// Builds [`OpenAiCorrector`] instances from `[llm]` config.
+/// The only [`CorrectorFactory`] implementation today.
+pub struct OpenAiCorrectorFactory;
+
+impl OpenAiCorrectorFactory {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for OpenAiCorrectorFactory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CorrectorFactory for OpenAiCorrectorFactory {
+    fn build_corrector(&self, cfg: &Llm) -> Option<Arc<dyn TextCorrector>> {
+        if cfg.enabled && !cfg.base_url.trim().is_empty() {
+            Some(Arc::new(OpenAiCorrector::new(cfg)))
+        } else {
+            None
+        }
+    }
+
+    fn build_probe(&self, cfg: &Llm) -> Arc<dyn LlmProbe> {
+        Arc::new(OpenAiCorrector::new(cfg))
     }
 }
 

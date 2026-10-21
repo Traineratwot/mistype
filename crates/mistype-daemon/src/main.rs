@@ -11,7 +11,7 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
-#[command(name = "mistype", version, about = "Fix text typed in the wrong keyboard layout")]
+#[command(name = "mistype", version, about = concat!("Fix text typed in the wrong keyboard layout (v", env!("CARGO_PKG_VERSION"), ")"))]
 struct Cli {
     /// Verbose logging (debug) — shows hotkey and LLM decisions at runtime.
     #[arg(short, long, global = true)]
@@ -134,7 +134,10 @@ async fn main() -> anyhow::Result<()> {
             let probe = std::sync::Arc::new(
                 mistype_adapters::platform::portable::OpenAiCorrector::new(&cfg.llm),
             );
-            mistype_ui::run_settings(Box::new(store), config_dir, Some(probe))?;
+            let clipboard_read = std::sync::Arc::new(
+                mistype_adapters::ArboardClipboard::new(None, 0),
+            );
+            mistype_ui::run_settings(Box::new(store), config_dir, Some(probe), Some(clipboard_read))?;
         }
         Command::Reload => {
             let path = std::env::temp_dir().join("mistype.reload");
@@ -157,7 +160,8 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Beep => {
             println!("playing hotkey feedback sound…");
-            mistype_ui::play_hotkey_sound();
+            use mistype_app::ports::SoundPort;
+            mistype_adapters::SystemSound::new().play_hotkey();
             // Give the player a moment so the process isn't killed on exit.
             tokio::time::sleep(std::time::Duration::from_millis(400)).await;
             println!("done (if you heard nothing, install canberra-gtk-play or paplay)");
@@ -165,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Selftest => {
             println!("Mistype hotkey self-test");
             println!("=========================");
-            let report = mistype_adapters::platform::linux::selftest::run_hotkey_selftest().await;
+            let report = mistype_adapters::run_hotkey_selftest().await;
             report.print();
             if !report.all_ok() {
                 eprintln!("\nself-test FAILED");
@@ -191,9 +195,11 @@ async fn main() -> anyhow::Result<()> {
                 "from" => entry.from.as_str(),
                 _ => entry.to.as_str(),
             };
-            // Use the same clipboard path as the daemon (arboard).
-            let mut clip = arboard::Clipboard::new().map_err(|e| anyhow::anyhow!("clipboard: {e}"))?;
-            clip.set_text(text.to_string())
+            // Same clipboard adapter as the daemon (not a raw arboard instance).
+            use mistype_app::ports::ClipboardPort;
+            let clip = mistype_adapters::ArboardClipboard::new(None, 0);
+            clip.put_text(text)
+                .await
                 .map_err(|e| anyhow::anyhow!("clipboard set: {e}"))?;
             println!("copied ({} chars)", text.chars().count());
         }
@@ -206,8 +212,12 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Persist an LLM-fix outcome for the Plasma widget history panel.
-fn record_llm_history(out: &mistype_domain::CorrectionOutcome) {
+fn record_llm_history(
+    out: &mistype_domain::CorrectionOutcome,
+    history: &std::sync::Arc<dyn mistype_app::ports::LlmHistoryStore>,
+) {
     use mistype_domain::CorrectionOutcome;
+    use mistype_app::ports::LlmHistoryEntry;
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -217,30 +227,23 @@ fn record_llm_history(out: &mistype_domain::CorrectionOutcome) {
             original,
             converted,
             ..
-        } => mistype_adapters::append_llm_history(mistype_adapters::LlmHistoryEntry {
-            ts,
-            from: original.clone(),
-            to: converted.clone(),
-            ok: true,
-        }),
-        CorrectionOutcome::Partial {
+        }
+        | CorrectionOutcome::Partial {
             original,
             converted,
             ..
-        } => mistype_adapters::append_llm_history(mistype_adapters::LlmHistoryEntry {
+        } => history.append(LlmHistoryEntry {
             ts,
             from: original.clone(),
             to: converted.clone(),
             ok: true,
         }),
-        CorrectionOutcome::Failed(e) => mistype_adapters::append_llm_history(
-            mistype_adapters::LlmHistoryEntry {
-                ts,
-                from: String::new(),
-                to: format!("error: {e}"),
-                ok: false,
-            },
-        ),
+        CorrectionOutcome::Failed(e) => history.append(LlmHistoryEntry {
+            ts,
+            from: String::new(),
+            to: format!("error: {e}"),
+            ok: false,
+        }),
         CorrectionOutcome::NoInputFound | CorrectionOutcome::Disabled => {}
     }
 }
@@ -282,18 +285,23 @@ async fn run_daemon() -> anyhow::Result<()> {
     let mut events = ctx.hotkeys.events();
     let service = ctx.service.clone();
     let buffer = ctx.buffer.clone();
+    let sound = ctx.sound.clone();
+    let history = ctx.history.clone();
+    let heartbeat = ctx.heartbeat.clone();
+    let corrector_factory = ctx.corrector_factory.clone();
 
     // Word events → LLM undo (Backspace) + cancel-on-typing.
     {
         let mut word_rx = buffer.word_events();
         let svc = service.clone();
+        let snd = sound.clone();
         tokio::spawn(async move {
             use mistype_app::ports::WordEvent;
             while let Ok(ev) = word_rx.recv().await {
                 match ev {
                     WordEvent::Backspace => {
                         if svc.on_backspace().await {
-                            mistype_ui::play_fix_sound();
+                            snd.play_fix();
                         }
                     }
                     WordEvent::Updated(_) => svc.on_typing(),
@@ -327,7 +335,7 @@ async fn run_daemon() -> anyhow::Result<()> {
                         info!("hotkey received: {he:?}");
                         // Immediate feedback: blink tray + short sound.
                         tray_handle.flash(mistype_ui::FLASH_DURATION);
-                        mistype_ui::play_hotkey_sound();
+                        sound.play_hotkey();
 
                         match he {
                             HotkeyEvent::ConvertSelection => {
@@ -344,9 +352,9 @@ async fn run_daemon() -> anyhow::Result<()> {
                                 tray_handle.set_busy(false);
                                 mistype_adapters::write_llm_status(service.is_enabled(), false);
                                 info!("llm-fix outcome: {out:?}");
-                                record_llm_history(&out);
+                                record_llm_history(&out, &history);
                                 if out.is_success() {
-                                    mistype_ui::play_fix_sound();
+                                    sound.play_fix();
                                 }
                             }
                             HotkeyEvent::ToggleEnabled => {
@@ -378,7 +386,9 @@ async fn run_daemon() -> anyhow::Result<()> {
                             Ok(cfg) => {
                                 // Rebuild the OpenAI corrector so URL/token/prompt
                                 // changes apply without a full daemon restart.
-                                crate::wiring::install_text_corrector(&service, &cfg);
+                                crate::wiring::install_text_corrector(
+                                    &service, &cfg, &corrector_factory,
+                                );
                                 ctx.config_tx.send_replace(cfg);
                                 info!("config reloaded from disk");
                             }
@@ -412,7 +422,7 @@ async fn run_daemon() -> anyhow::Result<()> {
     }
 
     tray_handle.abort();
-    mistype_adapters::clear_daemon_heartbeat();
+    heartbeat.clear();
 
     if restart_requested {
         info!("restarting daemon (settings save)");

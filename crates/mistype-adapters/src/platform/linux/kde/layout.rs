@@ -198,3 +198,30 @@ mod tests {
         assert_eq!(after, before, "failed to restore original layout");
     }
 }
+
+/// Write-probe for `mistype doctor`: reads the layout list and does a safe
+/// `setLayout(current)` no-op to prove the write path works.
+/// Returns `(ok, detail)`.
+pub async fn probe_layouts() -> (bool, String) {
+    let conn = match zbus::Connection::session().await {
+        Ok(c) => c,
+        Err(e) => return (false, format!("session bus: {e}")),
+    };
+    let proxy = match KeyboardLayoutsProxy::new(&conn).await {
+        Ok(p) => p,
+        Err(e) => return (false, format!("proxy failed: {e}")),
+    };
+    let list = match proxy.get_layouts_list().await {
+        Ok(l) => l,
+        Err(e) => return (false, format!("getLayoutsList failed: {e}")),
+    };
+    let names: Vec<_> = list.iter().map(|(s, _, n)| format!("{s}({n})")).collect();
+    let cur = proxy.get_layout().await.unwrap_or(999);
+    // Write probe: setLayout(current) is a safe no-op that verifies the set path.
+    let write_ok = proxy.set_layout(cur).await.unwrap_or(false);
+    let write_note = if write_ok { "setLayout ok" } else { "setLayout rejected" };
+    (
+        write_ok,
+        format!("layouts: [{}] current index {cur} ({write_note})", names.join(", ")),
+    )
+}

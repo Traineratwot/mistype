@@ -6,6 +6,9 @@ pub mod kde;
 pub mod selftest;
 pub mod uinput_injector;
 
+pub use kde::probe_layouts;
+pub use selftest::{run_hotkey_selftest, SelfTestReport};
+
 use tracing::warn;
 
 use crate::platform::{DesktopKind, Platform, PlatformInfo};

@@ -7,7 +7,7 @@ Mistype is designed so that fixing a typo never turns into surveillance.
 | Principle | How it is implemented |
 |-----------|----------------------|
 | Not a keylogger | The keystroke buffer exists only in RAM (≤ 256 keys by default), is opt-in, and is dropped on exit / pause. Typed text is **never** written to disk or logs. |
-| Network only when you ask | No telemetry, no analytics. The only outbound network call is the optional **LLM-fix selection** request to the OpenAI-compatible endpoint **you** configure. |
+| Network only when you ask | No telemetry, no analytics. The only outbound network call is the optional **LLM-fix selection** request to the OpenAI-compatible endpoint **you** configure. **Exception:** `mistype doctor` makes a one-shot GitHub Releases update check (explicit user action, never automatic). |
 | Clipboard is borrowed, not kept | Before reading a selection Mistype saves the current clipboard, uses a unique marker, then restores the snapshot after paste. Non-text clipboard content is not restored (documented limitation). |
 | Password fields | Exclude list (`behavior.excluded_apps`, default KeepassXC / KWalletManager) plus a documentation warning: do not press the hotkey in password fields. |
 | Group `input` is a trade-off | Global hotkeys and uinput injection require membership in `input`. The risk is documented in [SECURITY.md](SECURITY.md). |
@@ -25,6 +25,12 @@ to `POST {llm.base_url}/v1/chat/completions`. No other text, no keystroke
 buffer, no clipboard history. The response is used once to replace the
 selection and is not stored.
 
+**Update check (doctor only):** `mistype doctor` sends a single
+`GET https://api.github.com/repos/Traineratwot/mistype/releases/latest`
+(User-Agent: `mistype/{version}`) to compare the running version against the
+latest release. This is an explicit user action; no other GitHub API access
+occurs and nothing is sent automatically.
+
 Other IPC (always local):
 
 - **D-Bus session bus** — `org.kde.keyboard` / `org.kde.KeyboardLayouts` to read and set the current layout.
@@ -40,7 +46,7 @@ Other IPC (always local):
 | Undo target (original + replacement) | RAM | ~4 seconds after an LLM replace, or until the next key |
 | LLM-fix history (last 30 from/to pairs) | `/tmp/mistype.llm-history.json` | Until reboot or tmp cleanup. Used by the Plasma widget; click-to-copy only. |
 | Config (incl. LLM token) | `~/.config/mistype/config.toml` | Until you delete it |
-| Logs | journald (optional) | Never include typed text (`privacy.log_text_content = false`, default). Never include the API token. |
+| Logs | journald (optional) | Never include typed text or the API token. |
 
 ## Settings → Privacy
 
@@ -50,8 +56,7 @@ Other IPC (always local):
 
 ## Your choices
 
-- `llm.enabled = false` or empty `llm.base_url` — no network at all.
+- `llm.enabled = false` or empty `llm.base_url` — no network at all (update check in `doctor` is separate and one-shot).
 - `privacy.typing_buffer = false` — disable the keystroke buffer entirely (LLM Backspace-undo still works).
 - `privacy.typing_buffer_max_keys` — shrink the RAM window (default 256).
-- `privacy.log_text_content` — keep **false** unless you are debugging; when true, logs may contain converted text.
 - Uninstall / purge removes the package; delete `~/.config/mistype/` to remove all local state (including the token).
