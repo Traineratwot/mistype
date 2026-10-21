@@ -2,12 +2,12 @@ Origin: Mistype
 Label: Mistype
 Suite: stable
 Codename: stable
-Date: Wed, 21 Oct 2026 07:55:45 +0000
+Date: Wed, 21 Oct 2026 08:24:56 +0000
 Architectures: amd64 arm64
 Description: Mistype apt repository
 MD5Sum:
- b0908fc3c4dbd904c97e0703881966e7             8496 Packages
- 0a8c018f634356095f6c96332dde5edd             1542 Packages.gz
+ d571df8bfa56799b5e0dabcc0f15864d            11328 Packages
+ 58ede6525db7679d5d01154080b08eb1             1780 Packages.gz
 SHA256:
- 764eca72d3461fbbf8d683f6c46346ac1c160d8cc3061ac097e684861abde53b             8496 Packages
- a3a41558d28da185eca1ecf6a92476b19a982f65eb0ec52bf2c6cc2bc8f96388             1542 Packages.gz
+ fc173276780769e5b223cad65974fc6f9f7ee248f806497f42bf60f8d2e824af            11328 Packages
+ 5cffd48cb480514fab55917a28547dd4f9984ae2c0b7d71baedc2beef83f13f7             1780 Packages.gz
