@@ -14,7 +14,11 @@
 
 Короткое видео (34 с): **[demo/mistype-demo.mp4](demo/mistype-demo.mp4)** — что происходит по хоткеям:
 
-https://github.com/user-attachments/assets/61396501-9062-437a-9a1e-2c50097079aa
+
+
+https://github.com/user-attachments/assets/afe4edac-7091-4f61-959a-753e38e452dd
+
+
 
 1. `Ctrl+Alt+R` — `ghbdtn vbh` → `привет мир`
 2. `Alt+R` — LLM-чистка выделенного (трей мигает жёлтым)
