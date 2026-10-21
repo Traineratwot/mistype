@@ -18,21 +18,18 @@
 
 ## Демо
 
-Короткое видео (~18 с): **[demo/mistype-demo.mp4](demo/mistype-demo.mp4)** — что происходит по хоткеям:
+Короткое видео (34 с): **[demo/mistype-demo.mp4](demo/mistype-demo.mp4)** — что происходит по хоткеям:
 
-https://github.com/user-attachments/assets/61396501-9062-437a-9a1e-2c50097079aa
+
+
+https://github.com/user-attachments/assets/afe4edac-7091-4f61-959a-753e38e452dd
+
+
 
 1. `Ctrl+Alt+R` — `ghbdtn vbh` → `привет мир`
 2. `Alt+R` — LLM-чистка выделенного (трей мигает жёлтым)
 3. `Backspace` — полная отмена замены
 4. Шпаргалка по хоткеям
-
-Это анимированный HTML-мокап (не живой скрин). Пересборка:
-
-```bash
-make demo                           # → demo/mistype-demo.mp4
-# demo/mistype-demo.html — сцены и тайминг
-```
 
 ---
 
@@ -222,7 +219,6 @@ ui / daemon  →  app (use-cases, ports)  →  domain (pure)
 ## Документация для разработчиков
 
 - [AGENTS.md](AGENTS.md) — архитектура, ports, landmines, FAQ
-- [docs/ALGORITHMS.md](docs/ALGORITHMS.md) — алгоритмы: замена текста, раскладка, хоткеи, LLM, undo
 - [docs/PLAN.md](docs/PLAN.md) — план и roadmap
 - [docs/MANUAL-TEST-MATRIX.md](docs/MANUAL-TEST-MATRIX.md) — ручная проверка
 
