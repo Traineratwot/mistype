@@ -360,7 +360,7 @@ Watch `RUST_LOG=debug` for `evdev key …` / `hotkey match` / `hotkey received`.
 - `assets/maps/en2ru.json`, `ru2en.json`, `assets/icons/mistype.svg`
 
 DEBIAN control has **no hunspell recommends** (dictionaries are gone).
-Docs: `docs/PLAN.md`, `PRIVACY.md`, `SECURITY.md`, `MANUAL-TEST-MATRIX.md`.
+Docs: `docs/PLAN.md`, `ALGORITHMS.md`, `PRIVACY.md`, `SECURITY.md`, `MANUAL-TEST-MATRIX.md`.
 
 ---
 

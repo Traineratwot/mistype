@@ -105,8 +105,9 @@ async function main() {
 
   // sample frames for sanity
   const samples = path.join(root, 'demo', '.samples');
+  await rm(samples, { recursive: true, force: true });
   await mkdir(samples, { recursive: true });
-  for (const t of ['0.4', '5', '12', '18', '25', '31']) {
+  for (const t of ['0.3', '3', '5.5', '10', '14', '17']) {
     await run('ffmpeg', [
       '-y', '-ss', t, '-i', outMp4, '-frames:v', '1',
       path.join(samples, `t${t}.png`),

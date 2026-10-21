@@ -8,11 +8,17 @@
 
 Аналог Punto Switcher / Keyboop для Kubuntu (Debian + KDE Plasma 6).
 
+> **Об ИИ:** этот проект **полностью написан искусственным интеллектом** (LLM-агентом
+> в процессе парного/автономного программирования). Человек ставил задачи, ревьюил
+> и тестировал; весь код, тесты, документация и упаковка сгенерированы ИИ.
+> Это осознанный эксперимент: качество, архитектура и maintainability — под
+> наблюдением, но авторство исходников принадлежит ИИ.
+
 ---
 
 ## Демо
 
-Короткое видео (34 с): **[demo/mistype-demo.mp4](demo/mistype-demo.mp4)** — что происходит по хоткеям:
+Короткое видео (~18 с): **[demo/mistype-demo.mp4](demo/mistype-demo.mp4)** — что происходит по хоткеям:
 
 https://github.com/user-attachments/assets/61396501-9062-437a-9a1e-2c50097079aa
 
@@ -24,7 +30,7 @@ https://github.com/user-attachments/assets/61396501-9062-437a-9a1e-2c50097079aa
 Это анимированный HTML-мокап (не живой скрин). Пересборка:
 
 ```bash
-node tools/render-demo.mjs          # → demo/mistype-demo.mp4
+make demo                           # → demo/mistype-demo.mp4
 # demo/mistype-demo.html — сцены и тайминг
 ```
 
@@ -216,6 +222,7 @@ ui / daemon  →  app (use-cases, ports)  →  domain (pure)
 ## Документация для разработчиков
 
 - [AGENTS.md](AGENTS.md) — архитектура, ports, landmines, FAQ
+- [docs/ALGORITHMS.md](docs/ALGORITHMS.md) — алгоритмы: замена текста, раскладка, хоткеи, LLM, undo
 - [docs/PLAN.md](docs/PLAN.md) — план и roadmap
 - [docs/MANUAL-TEST-MATRIX.md](docs/MANUAL-TEST-MATRIX.md) — ручная проверка
 

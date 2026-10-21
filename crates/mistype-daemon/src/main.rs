@@ -321,6 +321,12 @@ async fn run_daemon() -> anyhow::Result<()> {
     let last_restart = std::fs::read_to_string(&restart_path).unwrap_or_default();
     mistype_adapters::write_llm_status(service.is_enabled(), false);
 
+    // Intervals (not sleep) so other select! branches don't reset the timers.
+    let mut heartbeat_tick = tokio::time::interval(std::time::Duration::from_secs(2));
+    heartbeat_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut poll_tick = tokio::time::interval(std::time::Duration::from_millis(400));
+    poll_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     let mut restart_requested = false;
     loop {
         tokio::select! {
@@ -369,7 +375,7 @@ async fn run_daemon() -> anyhow::Result<()> {
                     }
                 }
             }
-            _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
+            _ = heartbeat_tick.tick() => {
                 mistype_adapters::touch_llm_status(service.is_enabled());
                 if let Ok(v) = std::fs::read_to_string(&toggle_path) {
                     if v != last_toggle {
@@ -400,7 +406,7 @@ async fn run_daemon() -> anyhow::Result<()> {
                     }
                 }
             }
-            _ = tokio::time::sleep(std::time::Duration::from_millis(400)) => {
+            _ = poll_tick.tick() => {
                 // Settings Save: full restart so hotkeys / consume rebind.
                 if let Ok(token) = std::fs::read_to_string(&restart_path) {
                     if token != last_restart {

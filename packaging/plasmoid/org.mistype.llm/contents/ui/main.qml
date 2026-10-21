@@ -52,7 +52,10 @@ PlasmoidItem {
         onNewData: function (source, data) {
             var out = data["stdout"] !== undefined ? String(data["stdout"]).trim() : "";
             disconnectSource(source);
-            if (source.indexOf("llm-history.json") >= 0 || source.indexOf("llm-history") === 0) {
+            // Only the status poll (cat …/mistype.llm-history.json) updates
+            // daemonRunning — copy/clear commands must not clobber the LED.
+            if (source.indexOf("cat /tmp/mistype.llm-history.json") >= 0
+                || source.indexOf("cat /tmp/mistype.llm-history") >= 0) {
                 try {
                     var obj = out ? JSON.parse(out) : {};
                     if (Array.isArray(obj)) {

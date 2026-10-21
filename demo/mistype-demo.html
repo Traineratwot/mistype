@@ -14,8 +14,6 @@
     --accent: #7aa2f7;
     --green: #9ece6a;
     --yellow: #e0af68;
-    --red: #f7768e;
-    --cyan: #7dcfff;
     --purple: #bb9af7;
     --selection: rgba(122, 162, 247, 0.35);
     --shadow: 0 18px 50px rgba(0,0,0,0.45);
@@ -30,7 +28,6 @@
   }
   #stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; }
 
-  /* ---------- shared chrome ---------- */
   .panel {
     background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 100%);
     border: 1px solid rgba(255,255,255,0.07);
@@ -45,22 +42,19 @@
     font-size: 18px;
   }
   .dots { display: flex; gap: 8px; }
-  .dots i {
-    width: 12px; height: 12px; border-radius: 50%; display: block;
-  }
+  .dots i { width: 12px; height: 12px; border-radius: 50%; display: block; }
   .dots i:nth-child(1) { background: #f7768e; }
   .dots i:nth-child(2) { background: #e0af68; }
   .dots i:nth-child(3) { background: #9ece6a; }
 
-  /* ---------- scene host ---------- */
   .scene {
     position: absolute; inset: 0;
     opacity: 0; visibility: hidden;
   }
   .scene.on { opacity: 1; visibility: visible; }
 
-  /* ---------- intro ---------- */
-  .intro-wrap {
+  /* ---------- intro / outro ---------- */
+  .center-wrap {
     position: absolute; inset: 0;
     display: flex; flex-direction: column;
     align-items: center; justify-content: center;
@@ -71,28 +65,25 @@
       var(--bg);
   }
   .logo-orb {
-    width: 180px; height: 180px; border-radius: 40px;
-    background: linear-gradient(145deg, #7aa2f7, #bb9af7 55%, #7dcfff);
+    width: 220px; height: 220px;
+    border-radius: 52px;
     display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 25px 70px rgba(122,162,247,0.35);
+    background: radial-gradient(circle at 35% 30%, rgba(122,162,247,0.28), rgba(187,154,247,0.12) 60%, transparent 75%);
+    filter: drop-shadow(0 22px 50px rgba(122,162,247,0.35));
   }
-  .logo-orb span {
-    font-size: 64px; font-weight: 800; color: #16161e;
-    letter-spacing: -2px;
-    font-family: "DejaVu Sans Mono", "JetBrains Mono", monospace;
-  }
-  .intro-wrap h1 {
-    font-size: 88px; font-weight: 800; letter-spacing: -2px;
+  .logo-orb svg { width: 200px; height: 200px; display: block; }
+  .center-wrap h1 {
+    font-size: 84px; font-weight: 800; letter-spacing: -2px;
     background: linear-gradient(90deg, #c0caf5, #7dcfff);
     -webkit-background-clip: text; background-clip: text; color: transparent;
   }
-  .intro-wrap .sub {
-    font-size: 32px; color: var(--dim); text-align: center; line-height: 1.4;
-    max-width: 1100px;
+  .center-wrap .sub {
+    font-size: 30px; color: var(--dim); text-align: center; line-height: 1.4;
+    max-width: 1000px;
   }
-  .intro-wrap .sub b { color: var(--ink); font-weight: 600; }
+  .center-wrap .sub b { color: var(--ink); font-weight: 600; }
 
-  /* ---------- editor scene shell ---------- */
+  /* ---------- desk / editor ---------- */
   .desk {
     position: absolute; inset: 0;
     background:
@@ -101,24 +92,19 @@
   }
   .window {
     position: absolute;
-    left: 140px; top: 120px;
-    width: 1180px; height: 720px;
+    left: 140px; top: 140px;
+    width: 1180px; height: 680px;
   }
   .editor-body {
-    padding: 36px 40px;
+    padding: 40px 44px;
     font-family: "DejaVu Sans Mono", "JetBrains Mono", "Noto Sans Mono", monospace;
-    font-size: 34px;
-    line-height: 1.75;
+    font-size: 36px;
+    line-height: 1.85;
     color: #a9b1d6;
   }
-  .ln {
-    display: flex; gap: 28px;
-  }
+  .ln { display: flex; gap: 28px; min-height: 1.85em; }
   .ln .num { color: #4a5070; min-width: 36px; text-align: right; user-select: none; }
-  .typed {
-    white-space: pre-wrap;
-    min-height: 1.75em;
-  }
+  .typed { white-space: pre-wrap; min-height: 1.85em; }
   .sel {
     background: var(--selection);
     border-radius: 4px;
@@ -138,7 +124,7 @@
   /* side caption */
   .caption {
     position: absolute;
-    left: 1380px; top: 180px;
+    left: 1380px; top: 200px;
     width: 420px;
     padding: 28px 30px;
     border-radius: 18px;
@@ -147,16 +133,16 @@
     box-shadow: var(--shadow);
   }
   .caption .kicker {
-    font-size: 16px; letter-spacing: 2px; text-transform: uppercase;
+    font-size: 15px; letter-spacing: 2px; text-transform: uppercase;
     color: var(--accent); margin-bottom: 12px; font-weight: 700;
   }
   .caption h2 {
-    font-size: 36px; line-height: 1.25; margin-bottom: 16px; font-weight: 700;
+    font-size: 34px; line-height: 1.25; margin-bottom: 12px; font-weight: 700;
   }
   .caption p {
-    font-size: 22px; line-height: 1.5; color: var(--dim);
+    font-size: 21px; line-height: 1.45; color: var(--dim);
   }
-  .caption p b { color: var(--ink); }
+  .caption p b { color: var(--ink); font-weight: 600; }
 
   /* hotkey chip */
   .hotkey {
@@ -171,7 +157,7 @@
     opacity: 0;
   }
   .hotkey .label {
-    font-size: 15px; letter-spacing: 1.5px; text-transform: uppercase;
+    font-size: 14px; letter-spacing: 1.5px; text-transform: uppercase;
     color: var(--dim); margin-bottom: 14px;
   }
   .keys { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
@@ -196,7 +182,7 @@
   }
   .plus { color: var(--dim); font-size: 22px; font-weight: 600; }
 
-  /* tray */
+  /* taskbar / tray */
   .taskbar {
     position: absolute;
     left: 0; right: 0; bottom: 0;
@@ -210,58 +196,24 @@
     z-index: 20;
   }
   .tray-icon {
-    width: 36px; height: 36px; border-radius: 10px;
-    background: linear-gradient(145deg, #7aa2f7, #bb9af7);
+    width: 40px; height: 40px; border-radius: 10px;
     display: flex; align-items: center; justify-content: center;
-    font-family: "DejaVu Sans Mono", monospace;
-    font-size: 11px; font-weight: 800; color: #16161e;
     position: relative;
+    background: rgba(255,255,255,0.04);
   }
+  .tray-icon svg { width: 34px; height: 34px; display: block; }
   .tray-icon.flash {
-    box-shadow: 0 0 0 6px rgba(122,162,247,0.35), 0 0 28px rgba(122,162,247,0.8);
+    box-shadow: 0 0 0 5px rgba(224,175,104,0.40), 0 0 28px rgba(224,175,104,0.75);
+    background: rgba(224,175,104,0.18);
   }
   .tray-icon.busy {
-    background: linear-gradient(145deg, #e0af68, #f7768e);
-    box-shadow: 0 0 0 6px rgba(224,175,104,0.35), 0 0 28px rgba(224,175,104,0.7);
+    box-shadow: 0 0 0 5px rgba(224,175,104,0.35), 0 0 28px rgba(224,175,104,0.65);
+    background: rgba(224,175,104,0.16);
   }
-  .tray-icon.off {
-    background: #4a5070;
-    color: #a9b1d6;
-  }
+  .tray-icon.busy svg { filter: sepia(1) saturate(2.2) hue-rotate(-10deg) brightness(1.05); }
   .clock {
     color: var(--dim); font-size: 18px; font-variant-numeric: tabular-nums;
     min-width: 72px;
-  }
-
-  /* toast */
-  .toast {
-    position: absolute;
-    right: 40px; top: 80px;
-    padding: 18px 24px;
-    border-radius: 14px;
-    background: rgba(36, 40, 59, 0.95);
-    border: 1px solid rgba(122,162,247,0.35);
-    color: var(--ink);
-    font-size: 24px;
-    opacity: 0;
-    z-index: 30;
-    box-shadow: var(--shadow);
-    max-width: 480px;
-  }
-  .toast .dot {
-    display: inline-block; width: 12px; height: 12px; border-radius: 50%;
-    background: var(--green); margin-right: 12px; vertical-align: middle;
-  }
-  .toast.busy .dot { background: var(--yellow); }
-  .toast.undo .dot { background: var(--purple); }
-
-  /* progress dots for LLM */
-  .llm-dots {
-    display: inline-flex; gap: 8px; margin-left: 10px; vertical-align: middle;
-  }
-  .llm-dots i {
-    width: 10px; height: 10px; border-radius: 50%; background: var(--yellow);
-    opacity: 0.25; display: block;
   }
 
   /* outro */
@@ -275,138 +227,129 @@
       var(--bg);
   }
   .outro-wrap h1 {
-    font-size: 72px; font-weight: 800; letter-spacing: -1.5px;
+    font-size: 64px; font-weight: 800; letter-spacing: -1.5px;
   }
   .cheat {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 18px 40px;
-    width: 1200px;
+    gap: 16px 40px;
+    width: 1100px;
   }
   .cheat-row {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 22px 28px;
+    padding: 20px 26px;
     background: rgba(36, 40, 59, 0.85);
     border: 1px solid rgba(255,255,255,0.08);
     border-radius: 14px;
   }
-  .cheat-row .what {
-    font-size: 26px; color: var(--ink);
-  }
-  .cheat-row .combo {
-    display: flex; gap: 8px;
-  }
+  .cheat-row .what { font-size: 24px; color: var(--ink); }
+  .cheat-row .combo { display: flex; gap: 8px; }
   .cheat-row .key {
     min-width: 48px; padding: 8px 12px; font-size: 18px; border-radius: 10px;
   }
-  .outro-note {
-    font-size: 24px; color: var(--dim);
-  }
-  .outro-note b { color: var(--accent); }
+  .outro-note { font-size: 22px; color: var(--dim); }
+  .outro-note b { color: var(--accent); font-weight: 600; }
 
-  /* progress bar at top of stage */
   #progress {
     position: absolute; left: 0; top: 0; height: 5px; width: 0;
     background: linear-gradient(90deg, #7aa2f7, #bb9af7, #7dcfff);
     z-index: 50;
     opacity: 0.85;
   }
-
-  .fade-label {
-    position: absolute; left: 50%; bottom: 120px; transform: translateX(-50%);
-    font-size: 28px; color: var(--dim); letter-spacing: 0.5px;
-    opacity: 0;
-  }
 </style>
 </head>
 <body>
+<!-- shared icon: assets/icons/mistype.svg -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mistype-icon" viewBox="0 0 64 64">
+    <rect x="4" y="12" width="56" height="40" rx="8" fill="#2b2e3b"/>
+    <rect x="8" y="16" width="48" height="32" rx="6" fill="#3d4254"/>
+    <rect x="12" y="22" width="14" height="10" rx="2" fill="#5b9cff"/>
+    <rect x="38" y="22" width="14" height="10" rx="2" fill="#ff7a59"/>
+    <path d="M28 27h8m0 0l-3-3m3 3l-3 3" stroke="#e8eaf0" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M36 37h-8m0 0l3-3m-3 3l3 3" stroke="#e8eaf0" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="16" y="38" width="32" height="6" rx="2" fill="#5a6078"/>
+  </symbol>
+</svg>
+
 <div id="stage">
   <div id="progress"></div>
 
   <!-- ============ INTRO ============ -->
   <section class="scene" id="scene-intro">
-    <div class="intro-wrap">
-      <div class="logo-orb"><span>↔</span></div>
+    <div class="center-wrap" id="intro-wrap">
+      <div class="logo-orb" id="intro-logo">
+        <svg viewBox="0 0 64 64"><use href="#mistype-icon"/></svg>
+      </div>
       <h1>Mistype</h1>
       <div class="sub">
-        Исправление текста, набранного <b>не той раскладкой</b>,<br>
-        и <b>LLM-чистка выделенного</b> — для KDE Plasma 6
+        Раскладка <b>EN↔RU</b> и <b>LLM-чистка</b> выделенного<br>
+        для KDE Plasma 6
       </div>
     </div>
   </section>
 
-  <!-- ============ EDITOR / DEMO ============ -->
+  <!-- ============ EDITOR ============ -->
   <section class="scene" id="scene-app">
-    <div class="desk">
+    <div class="desk" id="desk">
       <div class="window panel">
         <div class="titlebar">
           <div class="dots"><i></i><i></i><i></i></div>
-          <div>Конструктор — заметки.md</div>
+          <div>заметки.md</div>
         </div>
         <div class="editor-body">
           <div class="ln">
             <div class="num">1</div>
-            <div class="typed" id="line1"><span id="text1"></span><span class="caret" id="caret1"></span></div>
+            <div class="typed"><span id="text1"></span><span class="caret" id="caret1"></span></div>
           </div>
           <div class="ln">
             <div class="num">2</div>
-            <div class="typed" id="line2"><span id="text2"></span><span class="caret" id="caret2"></span></div>
-          </div>
-          <div class="ln">
-            <div class="num">3</div>
-            <div class="typed" id="line3"><span id="text3"></span><span class="caret" id="caret3"></span></div>
+            <div class="typed"><span id="text2"></span><span class="caret" id="caret2"></span></div>
           </div>
         </div>
       </div>
 
-      <div class="caption" id="caption">
-        <div class="kicker" id="cap-kicker">Шаг 1</div>
-        <h2 id="cap-title">Набрали не той раскладкой</h2>
-        <p id="cap-body">Набирайте как получится — Mistype перевернёт <b>выделенный</b> текст EN↔RU.</p>
+      <div class="caption">
+        <div class="kicker" id="cap-kicker"></div>
+        <h2 id="cap-title"></h2>
+        <p id="cap-body"></p>
       </div>
 
       <div class="hotkey" id="hotkey">
         <div class="label">Горячая клавиша</div>
-        <div class="keys" id="keys">
-          <!-- filled by JS -->
-        </div>
+        <div class="keys" id="keys"></div>
       </div>
 
-      <div class="toast" id="toast"><span class="dot"></span><span id="toast-text"></span></div>
-
       <div class="taskbar">
-        <div class="tray-icon" id="tray">EN↔RU</div>
+        <div class="tray-icon" id="tray">
+          <svg viewBox="0 0 64 64"><use href="#mistype-icon"/></svg>
+        </div>
         <div class="clock">12:41</div>
       </div>
     </div>
-    <div class="fade-label" id="fade-label"></div>
   </section>
 
   <!-- ============ OUTRO ============ -->
   <section class="scene" id="scene-outro">
-    <div class="outro-wrap">
+    <div class="outro-wrap" id="outro-wrap">
       <h1>Одна клавиша — и текст в порядке</h1>
       <div class="cheat" id="cheat"></div>
-      <div class="outro-note">Трей · пауза <b>Ctrl+Alt+T</b> · настройки и LLM-история в Plasma-виджете</div>
+      <div class="outro-note">Трей · настройки · <b>Plasma-виджет</b> с историей LLM</div>
     </div>
   </section>
 </div>
 
 <script>
 (function () {
-  const DURATION = 34; // seconds
+  const DURATION = 18.5;
 
-  // ---- helpers ----
   const $ = (id) => document.getElementById(id);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const range = (t, a, b) => clamp((t - a) / (b - a), 0, 1);
   const ease = (x) => 1 - Math.pow(1 - x, 3);
-  const easeInOut = (x) => x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
 
   function setScene(id, on) {
-    const el = $(id);
-    if (on) el.classList.add('on');
-    else el.classList.remove('on');
+    $(id).classList.toggle('on', on);
   }
 
   function setKeys(list, pressedIdx) {
@@ -432,8 +375,6 @@
       { what: 'LLM-исправление', keys: ['Alt', 'R'] },
       { what: 'Отменить замену', keys: ['Backspace'] },
       { what: 'Пауза / включить', keys: ['Ctrl', 'Alt', 'T'] },
-      { what: 'Настройки', keys: ['Трей'] },
-      { what: 'История LLM', keys: ['Виджет'] },
     ];
     const root = $('cheat');
     if (root.childElementCount) return;
@@ -457,36 +398,14 @@
     });
   }
 
-  function showHotkey(visible, y) {
+  function showHotkey(opacity, y) {
     const el = $('hotkey');
-    el.style.opacity = visible ? String(visible) : '0';
+    el.style.opacity = String(opacity || 0);
     if (y != null) el.style.top = y + 'px';
   }
 
-  function toast(msg, kind, opacity) {
-    const el = $('toast');
-    el.className = 'toast' + (kind ? ' ' + kind : '');
-    $('toast-text').innerHTML = msg;
-    el.style.opacity = String(opacity == null ? 1 : opacity);
-  }
-
   function trayState(state) {
-    const el = $('tray');
-    el.className = 'tray-icon' + (state ? ' ' + state : '');
-    if (state === 'off') el.textContent = '✕';
-    else el.textContent = 'EN↔RU';
-  }
-
-  // type text into a span with reveal count
-  function typeInto(spanId, text, n, selected) {
-    const el = $(spanId);
-    const shown = text.slice(0, Math.max(0, n));
-    const rest = text.slice(Math.max(0, n));
-    if (selected) {
-      el.innerHTML = '<span class="sel">' + escapeHtml(shown) + '</span>' + escapeHtml(rest);
-    } else {
-      el.textContent = shown;
-    }
+    $('tray').className = 'tray-icon' + (state ? ' ' + state : '');
   }
 
   function escapeHtml(s) {
@@ -497,244 +416,199 @@
     $('text' + n).innerHTML = html;
   }
 
-  function blinkCaret(id, t, on) {
+  function typeInto(spanId, text, n, selected) {
+    const shown = text.slice(0, Math.max(0, n));
+    const rest = text.slice(Math.max(0, n));
+    if (selected) {
+      $(spanId).innerHTML = '<span class="sel">' + escapeHtml(shown) + '</span>' + escapeHtml(rest);
+    } else {
+      $(spanId).textContent = shown;
+    }
+  }
+
+  function blinkCaret(id, on) {
     $(id).classList.toggle('blink', on);
   }
 
-  // ---- content constants ----
-  const WRONG = 'ghbdtn vbh';          // привет мир
-  const RIGHT = 'привет мир';
-  const MESSY = 'ну это самое, как его, кароче надо сделать штото';
-  const CLEAN = 'Нужно сделать что-то существенное.';
+  function setCaption(kicker, title, body) {
+    $('cap-kicker').textContent = kicker;
+    $('cap-title').textContent = title;
+    $('cap-body').innerHTML = body;
+  }
 
-  // ---- master seek ----
+  // hard swap at midpoint — the app replaces text instantly, no crossfade
+  function morphLine(n, from, to, m) {
+    const text = m < 0.5 ? from : to;
+    setLine(n, '<span class="sel">' + escapeHtml(text) + '</span>');
+  }
+
+  // ---- content ----
+  const WRONG = 'ghbdtn vbh';
+  const RIGHT = 'привет мир';
+  const MESSY = 'ну это самое, кароче надо сделать штото';
+  const CLEAN = 'Нужно сделать кое-что важное.';
+
   function seek(t) {
-    // progress bar
     $('progress').style.width = (t / DURATION * 100) + '%';
 
-    // ========== SCENE INTRO 0–3.4 ==========
-    if (t < 3.4) {
+    // ========== INTRO 0–2.2 ==========
+    if (t < 2.2) {
       setScene('scene-intro', true);
       setScene('scene-app', false);
       setScene('scene-outro', false);
-      const a = ease(range(t, 0.15, 1.2));
-      const orb = document.querySelector('.logo-orb');
-      const h1 = document.querySelector('.intro-wrap h1');
-      const sub = document.querySelector('.intro-wrap .sub');
-      orb.style.transform = 'scale(' + (0.85 + 0.15 * a) + ')';
-      orb.style.opacity = String(a);
-      h1.style.opacity = String(ease(range(t, 0.5, 1.5)));
-      h1.style.transform = 'translateY(' + (1 - ease(range(t, 0.5, 1.5))) * 24 + 'px)';
-      sub.style.opacity = String(ease(range(t, 0.9, 1.9)));
-      // subtle exit
-      const out = 1 - range(t, 3.0, 3.4);
-      document.querySelector('.intro-wrap').style.opacity = String(out);
+
+      const a = ease(range(t, 0.05, 0.7));
+      const logo = $('intro-logo');
+      const h1 = document.querySelector('#intro-wrap h1');
+      const sub = document.querySelector('#intro-wrap .sub');
+      logo.style.transform = 'scale(' + (0.9 + 0.1 * a) + ')';
+      logo.style.opacity = String(a);
+      h1.style.opacity = String(ease(range(t, 0.2, 0.85)));
+      h1.style.transform = 'translateY(' + (1 - ease(range(t, 0.2, 0.85))) * 22 + 'px)';
+      sub.style.opacity = String(ease(range(t, 0.45, 1.1)));
+      $('intro-wrap').style.opacity = String(1 - range(t, 1.9, 2.2));
       return;
     }
 
-    // ========== SCENE APP 3.4–28.6 ==========
-    if (t < 28.6) {
+    // ========== APP 2.2–16.0 ==========
+    if (t < 16.0) {
       setScene('scene-intro', false);
       setScene('scene-app', true);
       setScene('scene-outro', false);
-      document.querySelector('.intro-wrap').style.opacity = '1';
+      $('intro-wrap').style.opacity = '1';
 
-      // defaults
-      $('caret1').classList.remove('blink');
-      $('caret2').classList.remove('blink');
-      $('caret3').classList.remove('blink');
+      blinkCaret('caret1', false);
+      blinkCaret('caret2', false);
       showHotkey(0);
       trayState('');
-      toast('', null, 0);
-      $('fade-label').style.opacity = '0';
 
-      // ----- Phase A: convert  3.4–13.2 -----
-      if (t < 13.2) {
+      // ----- A: convert  2.2–7.5 -----
+      if (t < 7.5) {
         setLine(1, '');
         setLine(2, '');
-        setLine(3, '');
+        setCaption(
+          'Раскладка',
+          'Не та раскладка',
+          'Выделите текст и нажмите <b>Ctrl+Alt+R</b> — Mistype перевернёт EN↔RU.'
+        );
 
-        $('cap-kicker').textContent = 'Шаг 1 · Раскладка';
-        $('cap-title').textContent = 'Набрали не той раскладкой';
-        $('cap-body').innerHTML =
-          'Выделите «сломанный» текст и нажмите <b>Ctrl+Alt+R</b> — Mistype перевернёт EN↔RU и сменит раскладку.';
-
-        // typing 4.0–7.0
-        const typedN = Math.floor(easeInOut(range(t, 4.0, 7.0)) * WRONG.length);
-        if (t < 7.0) {
-          typeInto('text1', WRONG, typedN, false);
-          blinkCaret('caret1', t, Math.floor(t * 2) % 2 === 0);
+        // type wrong 2.4–3.9
+        if (t < 3.9) {
+          const n = Math.floor(range(t, 2.4, 3.9) * WRONG.length);
+          typeInto('text1', WRONG, n, false);
+          blinkCaret('caret1', Math.floor(t * 2) % 2 === 0);
         }
 
-        // selection 7.0–8.0
-        if (t >= 7.0 && t < 8.6) {
-          const selOn = ease(range(t, 7.0, 7.5));
-          typeInto('text1', WRONG, WRONG.length, selOn > 0.3);
+        // select 3.9–5.3
+        if (t >= 3.9 && t < 5.3) {
+          typeInto('text1', WRONG, WRONG.length, t >= 4.2);
         }
 
-        // hotkey chip 8.0–11.8
-        if (t >= 8.0 && t < 11.8) {
-          const op = ease(range(t, 8.0, 8.5));
-          showHotkey(op, 620);
-          if (t < 9.2) {
-            // keys light up one by one
-            const idx = t < 8.45 ? 0 : t < 8.75 ? 1 : t < 9.15 ? 2 : -1;
+        // hotkey chip 4.3–5.9
+        if (t >= 4.3 && t < 5.9) {
+          showHotkey(ease(range(t, 4.3, 4.7)), 620);
+          if (t < 5.35) {
+            const idx = t < 4.7 ? 0 : t < 5.0 ? 1 : t < 5.3 ? 2 : -1;
             setKeys(['Ctrl', 'Alt', 'R'], idx);
           } else {
             setKeys(['Ctrl', 'Alt', 'R'], -1);
           }
         }
 
-        // morph 9.3–10.3
-        if (t >= 9.3) {
-          const m = ease(range(t, 9.3, 10.2));
-          if (m < 1) {
-            // half-flip visual: swap mid-way
-            if (m < 0.5) {
-              typeInto('text1', WRONG, WRONG.length, true);
-              setLine(1, '<span class="sel" style="opacity:' + (1 - m * 2) + '">' + escapeHtml(WRONG) + '</span>');
-            } else {
-              setLine(1, '<span class="sel" style="opacity:' + ((m - 0.5) * 2) + '">' + escapeHtml(RIGHT) + '</span>');
-            }
-          } else {
-            setLine(1, '<span class="sel">' + escapeHtml(RIGHT) + '</span>');
+        // morph + tray flash 5.3–6.4
+        if (t >= 5.3) {
+          morphLine(1, WRONG, RIGHT, ease(range(t, 5.3, 6.1)));
+          if (t >= 5.35 && t < 6.4) {
+            trayState(Math.floor((t - 5.35) * 6) % 2 === 0 ? 'flash' : '');
           }
-          // tray flash
-          if (t >= 9.4 && t < 10.6) {
-            const blink = Math.floor((t - 9.4) * 6) % 2 === 0;
-            trayState(blink ? 'flash' : '');
-          }
-          toast('<span class="dot"></span>Раскладка исправлена · <b>привет мир</b>', '', ease(range(t, 9.6, 10.2)) * (1 - range(t, 11.6, 12.4)));
-        }
-
-        // second line teaser 11.0–13.2
-        if (t >= 11.0) {
-          typeInto('text2', 'gfhjkm', Math.floor(easeInOut(range(t, 11.0, 12.2)) * 6), false);
-          blinkCaret('caret2', t, Math.floor(t * 2) % 2 === 0);
         }
       }
 
-      // ----- Phase B: LLM  13.2–23.2 -----
-      else if (t < 23.2) {
-        // clear typing remnants
+      // ----- B: LLM  7.5–13.0 -----
+      else if (t < 13.0) {
         setLine(1, escapeHtml(RIGHT));
-        setLine(3, '');
+        setLine(2, '');
+        setCaption(
+          'LLM',
+          'Чистка выделенного',
+          '<b>Alt+R</b> отправляет выделенное в LLM и заменяет результатом.'
+        );
 
-        $('cap-kicker').textContent = 'Шаг 2 · LLM';
-        $('cap-title').textContent = 'Выделение → LLM → замена';
-        $('cap-body').innerHTML =
-          'Выделите «разговорный» текст и нажмите <b>Alt+R</b>. Пока модель думает — трей мигает жёлтым.';
-
-        // show messy line (typed up)
-        if (t < 15.2) {
-          const n = Math.floor(easeInOut(range(t, 13.2, 15.0)) * MESSY.length);
+        // type messy 7.6–9.1
+        if (t < 9.1) {
+          const n = Math.floor(range(t, 7.6, 9.1) * MESSY.length);
           typeInto('text2', MESSY, n, false);
-          blinkCaret('caret2', t, Math.floor(t * 2) % 2 === 0);
+          blinkCaret('caret2', Math.floor(t * 2) % 2 === 0);
         }
 
-        // selection of messy
-        if (t >= 15.2 && t < 17.0) {
+        // select 9.1–11.8
+        if (t >= 9.1 && t < 11.8) {
           setLine(2, '<span class="sel">' + escapeHtml(MESSY) + '</span>');
         }
 
-        // hotkey Alt+R
-        if (t >= 15.6 && t < 19.6) {
-          showHotkey(ease(range(t, 15.6, 16.1)), 620);
-          if (t < 16.6) {
-            setKeys(['Alt', 'R'], t < 16.2 ? 0 : 1);
-          } else {
-            setKeys(['Alt', 'R'], -1);
-          }
+        // hotkey Alt+R 9.4–11.2
+        if (t >= 9.4 && t < 11.2) {
+          showHotkey(ease(range(t, 9.4, 9.8)), 620);
+          if (t < 10.3) setKeys(['Alt', 'R'], t < 9.9 ? 0 : 1);
+          else setKeys(['Alt', 'R'], -1);
         }
 
-        // busy 16.8–19.2
-        if (t >= 16.8 && t < 19.3) {
-          const blink = Math.floor((t - 16.8) * 5) % 2 === 0;
-          trayState(blink ? 'busy' : '');
-          const dots = [0, 1, 2].map((i) =>
-            '<i style="opacity:' + (0.25 + 0.75 * (Math.floor((t - 16.8) * 4) % 3 === i ? 1 : 0.2)) + '"></i>'
-          ).join('');
-          toast('Отправляем в LLM…<span class="llm-dots">' + dots + '</span>', 'busy',
-            ease(range(t, 16.8, 17.3)));
+        // tray busy while "LLM thinks" 10.2–11.8
+        if (t >= 10.2 && t < 11.8) {
+          trayState(Math.floor((t - 10.2) * 4) % 2 === 0 ? 'busy' : '');
         }
 
-        // result 19.3–21.0
-        if (t >= 19.3) {
-          const m = ease(range(t, 19.3, 20.2));
-          if (m < 0.5) {
-            setLine(2, '<span class="sel" style="opacity:' + (1 - m * 2) + '">' + escapeHtml(MESSY) + '</span>');
-          } else {
-            setLine(2, '<span class="sel" style="opacity:' + ((m - 0.5) * 2) + '">' + escapeHtml(CLEAN) + '</span>');
+        // morph + flash 11.8–12.9
+        if (t >= 11.8) {
+          morphLine(2, MESSY, CLEAN, ease(range(t, 11.8, 12.6)));
+          if (t >= 11.85 && t < 12.9) {
+            trayState(Math.floor((t - 11.85) * 6) % 2 === 0 ? 'flash' : '');
           }
-          if (m >= 1) setLine(2, '<span class="sel">' + escapeHtml(CLEAN) + '</span>');
-          if (t >= 19.4 && t < 20.8) {
-            const blink = Math.floor((t - 19.4) * 6) % 2 === 0;
-            trayState(blink ? 'flash' : '');
-          } else if (t >= 20.8) {
-            trayState('');
-          }
-          toast('Готово · текст заменён', '', ease(range(t, 19.6, 20.2)) * (1 - range(t, 22.2, 23.0)));
         }
       }
 
-      // ----- Phase C: undo  23.2–28.6 -----
+      // ----- C: undo  13.0–16.0 -----
       else {
         setLine(1, escapeHtml(RIGHT));
-        setLine(3, '');
+        setCaption(
+          'Отмена',
+          'Откат замены',
+          'Одна <b>Backspace</b> в течение ~4 с возвращает исходный текст.'
+        );
 
-        $('cap-kicker').textContent = 'Шаг 3 · Отмена';
-        $('cap-title').textContent = 'Одна Backspace — и всё вернулось';
-        $('cap-body').innerHTML =
-          'В течение <b>~4 секунд</b> после замены одна клавиша <b>Backspace</b> полностью откатывает LLM-результат.';
-
-        // show clean as selected
         setLine(2, '<span class="sel">' + escapeHtml(CLEAN) + '</span>');
 
-        // hotkey Backspace
-        if (t >= 23.6 && t < 26.4) {
-          showHotkey(ease(range(t, 23.6, 24.1)), 620);
-          setKeys(['Backspace'], t < 24.5 ? 0 : -1);
+        // hotkey Backspace 13.2–14.2
+        if (t >= 13.2 && t < 14.2) {
+          showHotkey(ease(range(t, 13.2, 13.55)), 620);
+          setKeys(['Backspace'], t < 13.85 ? 0 : -1);
         }
 
-        // undo morph 24.6–25.6
-        if (t >= 24.6) {
-          const m = ease(range(t, 24.6, 25.5));
-          if (m < 0.5) {
-            setLine(2, '<span class="sel" style="opacity:' + (1 - m * 2) + '">' + escapeHtml(CLEAN) + '</span>');
-          } else {
-            setLine(2, '<span class="sel" style="opacity:' + ((m - 0.5) * 2) + '">' + escapeHtml(MESSY) + '</span>');
+        // undo morph + flash 14.1–15.2
+        if (t >= 14.1) {
+          morphLine(2, CLEAN, MESSY, ease(range(t, 14.1, 14.9)));
+          if (t >= 14.15 && t < 15.2) {
+            trayState(Math.floor((t - 14.15) * 6) % 2 === 0 ? 'flash' : '');
           }
-          if (m >= 1) setLine(2, '<span class="sel">' + escapeHtml(MESSY) + '</span>');
-          if (t >= 24.7 && t < 26.0) {
-            const blink = Math.floor((t - 24.7) * 6) % 2 === 0;
-            trayState(blink ? 'flash' : '');
-          } else {
-            trayState('');
-          }
-          toast('Отменено · вернулся исходный текст', 'undo',
-            ease(range(t, 24.9, 25.5)) * (1 - range(t, 27.4, 28.3)));
         }
       }
 
-      // app fade out near end
-      const appOut = 1 - range(t, 28.1, 28.6);
-      document.querySelector('#scene-app .desk').style.opacity = String(appOut);
+      $('desk').style.opacity = String(1 - range(t, 15.6, 16.0));
       return;
     }
 
-    // ========== SCENE OUTRO 28.6–34 ==========
+    // ========== OUTRO 16.0–18.5 ==========
     setScene('scene-intro', false);
     setScene('scene-app', false);
     setScene('scene-outro', true);
-    document.querySelector('#scene-app .desk').style.opacity = '1';
+    $('desk').style.opacity = '1';
     setCheat();
-    const o = ease(range(t, 28.6, 29.6));
-    document.querySelector('.outro-wrap').style.opacity = String(o);
-    document.querySelector('.outro-wrap h1').style.transform =
-      'translateY(' + (1 - o) * 20 + 'px)';
+    const o = ease(range(t, 16.0, 16.7));
+    $('outro-wrap').style.opacity = String(o);
+    document.querySelector('#outro-wrap h1').style.transform =
+      'translateY(' + (1 - o) * 18 + 'px)';
   }
 
-  // expose for the renderer (Mode B frame-stepping)
   window.__seek = seek;
   window.__DURATION = DURATION;
   seek(0);

@@ -7,6 +7,7 @@
 #   make test       # workspace tests
 #
 #   make convert W=ghbdtn
+#   make demo              # render demo/mistype-demo.mp4
 #   make stop | status | restart
 
 BIN        := ./target/release/mistype
@@ -19,7 +20,7 @@ W          ?= ghbdtn
 .PHONY: all build debug test test-verbose clippy fmt \
         run run-fg restart stop status logs \
         doctor selftest beep settings \
-        setup install clean watch convert help
+        setup install clean watch convert demo help
 
 all: build
 
@@ -112,6 +113,9 @@ install: build ## install .desktop + udev rule (packaging/install.sh)
 
 convert: build ## make convert W=ghbdtn  — layout convert only
 	$(BIN) convert --text '$(W)'
+
+demo: ## render demo/mistype-demo.mp4 from HTML mockup (needs node + playwright + ffmpeg)
+	node tools/render-demo.mjs
 
 ## Housekeeping
 
