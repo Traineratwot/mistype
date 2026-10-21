@@ -25,13 +25,6 @@ https://github.com/user-attachments/assets/afe4edac-7091-4f61-959a-753e38e452dd
 3. `Backspace` — полная отмена замены
 4. Шпаргалка по хоткеям
 
-Это анимированный HTML-мокап (не живой скрин). Пересборка:
-
-```bash
-node tools/render-demo.mjs          # → demo/mistype-demo.mp4
-# demo/mistype-demo.html — сцены и тайминг
-```
-
 ---
 
 ## Возможности
