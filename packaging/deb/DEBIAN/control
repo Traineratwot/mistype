@@ -4,7 +4,7 @@ Section: utils
 Priority: optional
 Architecture: amd64
 Depends: libc6, libdbus-1-3
-Recommends: policykit-1
+Recommends: policykit-1, wl-clipboard
 Maintainer: Mistype contributors <mistype@localhost>
 Homepage: https://github.com/Traineratwot/mistype
 Description: Fix text typed in the wrong keyboard layout (EN↔RU)

@@ -20,7 +20,7 @@ stubs behind a platform layer (groundwork for the future).
 | Tray + settings GUI | `mistype-ui` | ✅ compiles, flash/sound + busy blink |
 | CLI / daemon / doctor / selftest | `mistype-daemon` | ✅ works on live KDE |
 
-**Tests: 128 green** (+ 1 ignored live KDE D-Bus test). Verified live:
+**Tests: 138 green** (+ 1 ignored live KDE D-Bus test). Verified live:
 hotkey intercept (evdev), layout switch (zbus), convert, tray flash + sound.
 
 Removed in the strip-down (do not resurrect): built-in LLM crate
@@ -215,7 +215,11 @@ See `docs/PLAN.md` for analogues, input strategies, test matrix, roadmap.
 | **Second uinput for clipboard chords** | Selection capture injects Ctrl+Insert | Keep a separate `UinputInjector` (current behavior). Don't “optimize” to one without retesting M-matrix. |
 | **arboard `set_text` drops the offer** | Wayland/X11 clipboard is hosted by the owner process; dropping `Clipboard` (or `wl-clipboard-rs` fork from a MT daemon) makes Ctrl+V paste **empty** and **deletes the selection** | Prefer `wl-copy` (daemonizes a child). Keep an arboard owner thread. Always `get_text()`-verify before Ctrl+V; if missing, `type_text` over the selection. |
 | **Never grab our own uinput** | Injected Ctrl+C/Ctrl+V are eaten by the evdev loop | Skip devices named `mistype*` in `evdev_hotkey.rs`. |
-| **Copy chord order** | Ctrl+C is SIGINT in Konsole | Capture tries Ctrl+Insert → Ctrl+Shift+C → Ctrl+C. Never lead with Ctrl+C. |
+| **Copy chord order** | Ctrl+C is SIGINT in Konsole; **Ctrl+Shift+C opens DevTools in browsers** | Chords are app-aware (`CaptureTarget` from focus + `behavior.terminal_apps`): GUI → Ctrl+Insert → Ctrl+C, terminal → Ctrl+Insert → Ctrl+Shift+C, unknown → Ctrl+Insert only. Never fire both risky fallbacks blindly. |
+| **arboard is X11-only (x11rb)** | On Wayland it talks the XWayland clipboard while native apps copy to the Wayland one — the marker protocol never sees the copy, so every fallback chord fires blind | Get/set chain: `wl-copy`/`wl-paste` → Klipper D-Bus (`org.kde.klipper`) → arboard. `mistype doctor` → `clipboard backend`. Only-arboard on Wayland = capture broken; install `wl-clipboard`. |
+| **Marker must never survive capture** | `MISTYPE_MARK_…` left in the user's clipboard (read errors / unknown snapshot skip the restore) | Every abort/error path goes through `discard_marker`: restore the saved text, or clear the marker only if it is still the current clipboard content. |
+| **`dbus-send` without `--print-reply`** | The process exits before the message is flushed — `setClipboardContents` is **silently lost** (marker/`put_text` never land → verify fails → wrong fallback) | Always pass `--print-reply` in `put_text_klipper`. Capture also verifies the marker landed before firing chords. |
+| **`type_text` map vs system layout** | Keys are injected for `target_layout`; if the system is still in the old layout, the typed text comes out wrong (looks like «не переворачивает») | Switch the layout **before** typing — see the `type_text` fallback in `replace_via_clipboard`. |
 | **Last-word fallback on empty capture** | `backspace(n)` with an active selection wipes it | `ConvertSelection` with `Ok(None)` returns `NoInputFound`. No word path. |
 | **`type_text` keymap is incomplete** | After `backspace`, a failed `type_text` leaves nothing | Word replace prefers clipboard paste (`replace_word_via_paste`); `type_text` is fallback only. |
 | **Focus monitor is best-effort** | KWin `getWindowInfo` often returns `{}`; `queryWindowInfo` is interactive | `FocusMonitor` = xprop then KWin; `None` → generic GUI path, never block. |
@@ -443,6 +447,15 @@ live bindings. Defaults ≠ current config.
 A: Tray icon flashes amber, sound plays, log shows `hotkey received: …`.
 During an LLM call the icon blinks yellow. If the correction itself fails
 (e.g. empty selection), you still get the flash — that proves intercept works.
+
+**Q: In the browser the convert hotkey opens DevTools / `MISTYPE_MARK_…` stays in the clipboard.**  
+A: Two old bugs, both fixed: the capture used to blindly inject Ctrl+Shift+C
+(= DevTools in browsers) as a copy fallback, and a failed capture left the
+marker in the clipboard. Now chords are app-aware and every abort path clears
+the marker. If capture still finds “no selection” with a real selection,
+the clipboard backend is the X11 fallback on Wayland — `mistype doctor`
+→ `clipboard backend` says so; fix with `sudo apt install wl-clipboard`
+(or keep KDE Klipper running).
 
 **Q: `selftest` FAIL on `hotkey intercept`.**  
 A: Without group `input`, it fails at `open event*` first. With the group:

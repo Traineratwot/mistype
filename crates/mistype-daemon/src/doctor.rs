@@ -186,6 +186,43 @@ pub async fn run() -> DoctorReport {
         },
     ));
 
+    // Clipboard backend used by the selection-capture marker protocol.
+    // On Wayland arboard talks X11/XWayland and cannot see copies made by
+    // native Wayland apps — the capture would never observe the copy.
+    {
+        let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
+            || std::env::var("XDG_SESSION_TYPE").is_ok_and(|v| v == "wayland");
+        let has_wl_copy = std::process::Command::new("wl-copy")
+            .arg("--version")
+            .output()
+            .is_ok();
+        let has_klipper = std::process::Command::new("dbus-send")
+            .args([
+                "--session",
+                "--print-reply",
+                "--dest=org.kde.klipper",
+                "/klipper",
+                "org.kde.klipper.klipper.getClipboardContents",
+            ])
+            .output()
+            .is_ok_and(|o| o.status.success());
+        let (ok, detail) = if has_wl_copy {
+            (true, "wl-copy (native clipboard)".to_string())
+        } else if has_klipper {
+            (true, "klipper (native Wayland clipboard)".to_string())
+        } else if wayland {
+            (
+                false,
+                "x11 (arboard) on a Wayland session — selection capture cannot \
+                 see native Wayland copies. Fix: sudo apt install wl-clipboard"
+                    .to_string(),
+            )
+        } else {
+            (true, "x11 (arboard)".to_string())
+        };
+        lines.push(("clipboard backend".into(), ok, detail));
+    }
+
     // Active hotkey bindings from config (what to actually press).
     {
         use mistype_app::ports::ConfigStore;

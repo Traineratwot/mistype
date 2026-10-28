@@ -13,8 +13,8 @@ use tracing::{debug, warn};
 
 use crate::config::AppConfig;
 use crate::ports::{
-    CapturedSelection, ClipboardPort, FocusMonitor, LayoutSwitcher, Notifier, NotifyLevel,
-    SavedClipboard, SelectionCapture, TextCorrector, TextInjector, TypingBufferPort,
+    CaptureTarget, CapturedSelection, ClipboardPort, FocusMonitor, LayoutSwitcher, Notifier,
+    NotifyLevel, SavedClipboard, SelectionCapture, TextCorrector, TextInjector, TypingBufferPort,
 };
 
 /// Undo target after an LLM selection replace (Backspace rolls it back).
@@ -180,32 +180,43 @@ impl CorrectionService {
             }
         }
 
-        // Auto-pick terminal strategy when the focused app is a terminal —
-        // no separate hotkey needed.
-        let req = match (&req, &win) {
-            (CorrectionRequest::ConvertSelection, Some(w)) => {
+        let is_terminal = match &win {
+            Some(w) => {
                 let app = w.app_id.to_ascii_lowercase();
-                if cfg
-                    .behavior
+                cfg.behavior
                     .terminal_apps
                     .iter()
                     .any(|t| app == t.to_ascii_lowercase() || app.contains(&t.to_ascii_lowercase()))
-                {
-                    debug!("auto terminal strategy for '{app}'");
-                    CorrectionRequest::ConvertTerminal
-                } else {
-                    req
-                }
+            }
+            None => false,
+        };
+
+        // Auto-pick terminal strategy when the focused app is a terminal —
+        // no separate hotkey needed.
+        let req = match (&req, &win) {
+            (CorrectionRequest::ConvertSelection, Some(w)) if is_terminal => {
+                debug!("auto terminal strategy for '{app}'", app = w.app_id);
+                CorrectionRequest::ConvertTerminal
             }
             _ => req,
+        };
+
+        // Ctrl+Shift+C opens DevTools in browsers and Ctrl+C is SIGINT in
+        // terminals — the capture copy chords must match the focused app.
+        let target = if is_terminal {
+            CaptureTarget::Terminal
+        } else if win.is_some() {
+            CaptureTarget::Gui
+        } else {
+            CaptureTarget::Unknown
         };
 
         let _ = self.state_tx.send(CorrectionState::Capturing);
 
         let outcome = match req {
-            CorrectionRequest::ConvertSelection => self.convert_selection().await,
+            CorrectionRequest::ConvertSelection => self.convert_selection(target).await,
             CorrectionRequest::ConvertTerminal => self.convert_terminal().await,
-            CorrectionRequest::LlmFixSelection => self.llm_fix_selection().await,
+            CorrectionRequest::LlmFixSelection => self.llm_fix_selection(target).await,
         };
 
         let next = match &outcome {
@@ -227,8 +238,8 @@ impl CorrectionService {
         self.config.borrow().clone()
     }
 
-    async fn convert_selection(&self) -> CorrectionOutcome {
-        let captured = match self.selection.capture_selection().await {
+    async fn convert_selection(&self, target: CaptureTarget) -> CorrectionOutcome {
+        let captured = match self.selection.capture_selection(target).await {
             Ok(Some(sel)) => sel,
             Ok(None) => {
                 // Marker survived = copy produced nothing. A last-word fallback
@@ -250,7 +261,7 @@ impl CorrectionService {
     /// `LlmFixSelection` hotkey: capture the selection, send the whole text
     /// to the external LLM, replace the selection with the result.
     /// Explicit action only — never part of auto-replace.
-    async fn llm_fix_selection(&self) -> CorrectionOutcome {
+    async fn llm_fix_selection(&self, target: CaptureTarget) -> CorrectionOutcome {
         let cfg = self.cfg();
         if !cfg.llm.enabled {
             debug!("llm_fix_selection: feature disabled in settings");
@@ -269,7 +280,7 @@ impl CorrectionService {
             return CorrectionOutcome::Failed("no text corrector".into());
         };
 
-        let captured = match self.selection.capture_selection().await {
+        let captured = match self.selection.capture_selection(target).await {
             Ok(Some(sel)) => sel,
             Ok(None) => return CorrectionOutcome::NoInputFound,
             Err(e) => {
@@ -447,7 +458,11 @@ impl CorrectionService {
         // Terminal mode: capture selection (or fail), then clear the input
         // line and paste via Ctrl+Shift+V.
         let cfg = self.cfg();
-        let (text, saved) = match self.selection.capture_selection().await {
+        let (text, saved) = match self
+            .selection
+            .capture_selection(CaptureTarget::Terminal)
+            .await
+        {
             Ok(Some(sel)) => (sel.text, Some(sel.saved)),
             _ => return CorrectionOutcome::NoInputFound,
         };
@@ -491,12 +506,12 @@ impl CorrectionService {
         tokio::time::sleep(Duration::from_millis(cfg.behavior.paste_settle_ms)).await;
         self.restore_clipboard_optional(saved, &cfg).await;
 
-        self.switch_layout_for(&converted.converted).await;
+        let switched = self.switch_layout_for(&converted.converted).await;
 
         CorrectionOutcome::Converted {
             original: converted.original,
             converted: converted.converted,
-            layout_switched_to: None,
+            layout_switched_to: switched,
         }
     }
 
@@ -536,6 +551,7 @@ impl CorrectionService {
             }
         };
 
+        let mut switched = None;
         if paste_ok {
             if let Err(e) = self.injector.chord(KeyChord::CtrlV).await {
                 self.restore_clipboard(saved, &cfg).await;
@@ -543,6 +559,10 @@ impl CorrectionService {
             }
         } else {
             debug!("clipboard offer missing — typing over selection instead of empty paste");
+            // `type_text` injects keys for `target_layout` — the system must
+            // already be in that layout, otherwise the typed characters come
+            // out through the old layout and the text looks unchanged.
+            switched = self.switch_layout_for(&converted.converted).await;
             let target_layout = LayoutId::new(converted.to.as_str().to_string());
             if let Err(e) = self
                 .injector
@@ -561,12 +581,14 @@ impl CorrectionService {
         self.restore_clipboard(saved, &cfg).await;
 
         let _ = self.state_tx.send(CorrectionState::SwitchingLayout);
-        self.switch_layout_for(&converted.converted).await;
+        if switched.is_none() {
+            switched = self.switch_layout_for(&converted.converted).await;
+        }
 
         CorrectionOutcome::Converted {
             original: converted.original,
             converted: converted.converted,
-            layout_switched_to: None,
+            layout_switched_to: switched,
         }
     }
 
@@ -709,7 +731,10 @@ mod tests {
 
     #[async_trait]
     impl SelectionCapture for FakeSelection {
-        async fn capture_selection(&self) -> Result<Option<CapturedSelection>, CaptureError> {
+        async fn capture_selection(
+            &self,
+            _target: CaptureTarget,
+        ) -> Result<Option<CapturedSelection>, CaptureError> {
             Ok(self.text.clone().map(|text| CapturedSelection {
                 text,
                 saved: SavedClipboard { text: None },

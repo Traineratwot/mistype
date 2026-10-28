@@ -95,6 +95,20 @@ pub struct CapturedSelection {
     pub saved: SavedClipboard,
 }
 
+/// Kind of app holding the focus — decides which copy chords are safe to inject.
+///
+/// Ctrl+Shift+C opens DevTools in browsers, Ctrl+C is SIGINT in terminals, so
+/// the fallback copy chord must match the target app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureTarget {
+    /// Browser / GUI window.
+    Gui,
+    /// Terminal emulator.
+    Terminal,
+    /// Focus unknown — only universally safe chords.
+    Unknown,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotifyLevel {
     Info,
@@ -160,7 +174,7 @@ pub trait ClipboardPort: Send + Sync {
 pub trait SelectionCapture: Send + Sync {
     /// Clipboard-marker protocol. `Ok(None)` = no selection (marker survived
     /// and the user clipboard has already been restored).
-    async fn capture_selection(&self) -> Result<Option<CapturedSelection>, CaptureError>;
+    async fn capture_selection(&self, target: CaptureTarget) -> Result<Option<CapturedSelection>, CaptureError>;
 }
 
 #[async_trait]

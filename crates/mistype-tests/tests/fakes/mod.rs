@@ -152,7 +152,10 @@ impl FakeSelectionCapture {
 
 #[async_trait]
 impl SelectionCapture for FakeSelectionCapture {
-    async fn capture_selection(&self) -> Result<Option<CapturedSelection>, CaptureError> {
+    async fn capture_selection(
+        &self,
+        _target: CaptureTarget,
+    ) -> Result<Option<CapturedSelection>, CaptureError> {
         emit(&self.log, self.shared.as_ref(), "capture_selection");
         if self.fail {
             return Err(CaptureError::Failed("capture failed".into()));
